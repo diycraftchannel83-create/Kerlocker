@@ -30,6 +30,8 @@ jobs:
           java-version: "17"
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 9.3.1
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
@@ -56,7 +58,7 @@ jobs:
           KEYSTORE_PATH: ${{ runner.temp }}/release-upload-key.jks
           STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
-        run: ./gradlew --no-daemon --stacktrace :app:assembleRelease :app:bundleRelease
+        run: gradle --no-daemon --stacktrace :app:assembleRelease :app:bundleRelease
       - name: Build unsigned APK and AAB
         if: steps.signing.outputs.enabled != 'true'
         run: ./gradlew --no-daemon --stacktrace :app:assembleRelease :app:bundleRelease
