@@ -13,7 +13,7 @@ import com.example.biometric.BiometricAvailability
 import com.example.data.AlbumEntity
 import com.example.data.AlbumWithStats
 import com.example.data.BatchExportResult
-import com.example.data.BatchImportResult
+import com.example.data.DuplicateGroup
 import com.example.data.ExternalVaultEntry
 import com.example.data.GallerySortOrder
 import com.example.data.MediaCategory
@@ -22,6 +22,7 @@ import com.example.data.SecurityPreferencesState
 import com.example.data.VaultFileEntity
 import com.example.data.VaultFileFilter
 import com.example.data.VaultRepository
+import com.example.service.BackgroundEncryptionCoordinator
 import com.example.ui.components.ImageAdjustmentParams
 import com.example.ui.theme.VaultThemePreference
 import kotlinx.coroutines.delay
@@ -70,6 +71,14 @@ data class PendingSourceDeletePrompt(
     val items: List<PendingSourceDeleteItem>
 )
 
+data class DuplicateScanUiState(
+    val isScanning: Boolean = false,
+    val hasScanned: Boolean = false,
+    val groups: List<DuplicateGroup> = emptyList(),
+    val scannedFiles: Int = 0,
+    val totalFilesToHash: Int = 0
+)
+
 data class VaultUiState(
     val isPrefsLoaded: Boolean = false,
     val isLocked: Boolean = true,
@@ -91,7 +100,8 @@ data class VaultUiState(
     val externalVaultState: ExternalVaultUiState = ExternalVaultUiState(),
     val isRecoveringApp: Boolean = false,
     val lockoutTick: Long = 0L,
-    val pendingSourceDeletePrompt: PendingSourceDeletePrompt? = null
+    val pendingSourceDeletePrompt: PendingSourceDeletePrompt? = null,
+    val duplicateScanState: DuplicateScanUiState = DuplicateScanUiState()
 )
 
 sealed interface VaultEvent {
@@ -101,7 +111,8 @@ sealed interface VaultEvent {
 
 class BrankasViewModel(
     application: Application,
-    private val repository: VaultRepository
+    private val repository: VaultRepository,
+    private val encryptionCoordinator: BackgroundEncryptionCoordinator
 ) : AndroidViewModel(application) {
 
     private val _localState = MutableStateFlow(
@@ -112,7 +123,9 @@ class BrankasViewModel(
         )
     )
 
-    private val _events = MutableSharedFlow<VaultEvent>(extraBufferCapacity = 8)
+    private val _exportProgress = MutableStateFlow<ImportProgressState?>(null)
+
+    private val _events = MutableSharedFlow<VaultEvent>(extraBufferCapacity = 16)
     val events: SharedFlow<VaultEvent> = _events.asSharedFlow()
 
     @Volatile
@@ -122,13 +135,30 @@ class BrankasViewModel(
         _localState,
         repository.securityPreferencesFlow,
         repository.albumsWithStatsFlow,
-        repository.allFilesFlow
-    ) { local, prefs, albums, files ->
+        repository.allFilesFlow,
+        combine(
+            encryptionCoordinator.progressFlow,
+            _exportProgress,
+            encryptionCoordinator.pendingSourceDeleteFlow
+        ) { importProg, exportProg, pendingDelete ->
+            Triple(importProg ?: exportProg, pendingDelete, Unit)
+        }
+    ) { local, prefs, albums, files, bgTuple ->
         val now = System.currentTimeMillis()
         val lockoutRemaining = if (prefs.lockoutUntilMillis > now) {
             ((prefs.lockoutUntilMillis - now) + 999L) / 1000L
         } else {
             0L
+        }
+        val syncedDuplicates = if (local.duplicateScanState.hasScanned) {
+            val fileById = files.associateBy { it.id }
+            val filteredGroups = local.duplicateScanState.groups.mapNotNull { group ->
+                val remaining = group.files.mapNotNull { fileById[it.id] }
+                if (remaining.size > 1) group.copy(files = remaining) else null
+            }
+            local.duplicateScanState.copy(groups = filteredGroups)
+        } else {
+            local.duplicateScanState
         }
         local.copy(
             isPrefsLoaded = true,
@@ -136,7 +166,10 @@ class BrankasViewModel(
             securityPrefs = prefs,
             albums = albums,
             allFiles = files,
-            lockoutSecondsRemaining = lockoutRemaining
+            lockoutSecondsRemaining = lockoutRemaining,
+            importProgress = bgTuple.first,
+            pendingSourceDeletePrompt = bgTuple.second,
+            duplicateScanState = syncedDuplicates
         )
     }.stateIn(
         scope = viewModelScope,
@@ -145,6 +178,11 @@ class BrankasViewModel(
     )
 
     init {
+        viewModelScope.launch {
+            encryptionCoordinator.events.collect { event ->
+                _events.tryEmit(event)
+            }
+        }
         viewModelScope.launch {
             while (true) {
                 delay(1000L)
@@ -395,100 +433,85 @@ class BrankasViewModel(
         clearExternalPickerFlag()
         if (uris.isEmpty()) return
         val deleteOriginal = uiState.value.securityPrefs.deleteOriginalOnImport
+        encryptionCoordinator.enqueueImport(
+            uris = uris,
+            albumId = albumId,
+            deleteOriginal = deleteOriginal
+        )
+    }
 
+    fun dismissPendingSourceDeletePrompt() {
+        encryptionCoordinator.dismissPendingSourceDeletePrompt()
+    }
+
+    fun onSystemSourceDeleteCompleted(deletedCount: Int) {
+        encryptionCoordinator.onSystemSourceDeleteCompleted(deletedCount)
+    }
+
+    fun onSystemSourceDeleteUnavailable() {
+        encryptionCoordinator.onSystemSourceDeleteUnavailable()
+    }
+
+    fun scanForDuplicates() {
+        if (_localState.value.duplicateScanState.isScanning) return
         viewModelScope.launch {
             _localState.update {
                 it.copy(
-                    importProgress = ImportProgressState(
-                        processed = 0,
-                        total = uris.size,
-                        currentFileName = "Mengenkripsi ${uris.size} file dengan AES-256..."
+                    duplicateScanState = it.duplicateScanState.copy(
+                        isScanning = true,
+                        scannedFiles = 0,
+                        totalFilesToHash = 0
                     )
                 )
             }
-            val result = runCatching {
+            runCatching {
                 repository.ensureActiveVaultKeyLoaded()
-                repository.importFilesBatch(
-                    uris = uris,
-                    albumId = albumId,
-                    deleteOriginal = deleteOriginal
-                ) { processed, total ->
+                repository.scanForDuplicates { scanned, total ->
                     _localState.update {
                         it.copy(
-                            importProgress = ImportProgressState(
-                                processed = processed,
-                                total = total,
-                                currentFileName = "Mengenkripsi $processed dari $total file..."
+                            duplicateScanState = it.duplicateScanState.copy(
+                                isScanning = true,
+                                scannedFiles = scanned,
+                                totalFilesToHash = total
                             )
                         )
                     }
                 }
-            }.getOrElse { error ->
-                BatchImportResult(
-                    importedCount = 0,
-                    deletedCount = 0,
-                    sourceDeleteFailedCount = 0,
-                    failedCount = uris.size,
-                    firstFailureReason = error.localizedMessage ?: error.javaClass.simpleName
-                )
-            }
-
-            _localState.update { it.copy(importProgress = null) }
-
-            val hasDestFolder = uiState.value.securityPrefs.externalVaultFolderUri != null
-            val destNote = if (hasDestFolder) " & folder tujuan" else ""
-            val msg = when {
-                result.importedCount == 0 && result.failedCount > 0 ->
-                    "Import gagal untuk ${result.failedCount} file. Penyebab: ${result.firstFailureReason ?: "gagal membaca file"}"
-                result.importedCount == 0 -> "Tidak ada file yang berhasil diimpor"
-                result.failedCount > 0 ->
-                    "${result.importedCount} file berhasil diamankan$destNote; ${result.failedCount} file gagal."
-                deleteOriginal && result.deletedCount == result.importedCount ->
-                    "${result.importedCount} file terenkripsi ke brankas$destNote & langsung dihapus dari Galeri"
-                deleteOriginal && result.deletedCount > 0 && result.sourceDeleteFailedCount > 0 ->
-                    "${result.importedCount} file masuk ke brankas$destNote (${result.deletedCount} terhapus, ${result.sourceDeleteFailedCount} dilindungi Android)"
-                deleteOriginal && result.sourceDeleteFailedCount > 0 ->
-                    "${result.importedCount} file masuk ke brankas$destNote (sumber dilindungi sistem. Hubungkan folder sumber atau pilih via Pengelola File untuk hapus otomatis)"
-                else ->
-                    "${result.importedCount} file berhasil dienkripsi (AES-256) ke brankas$destNote"
-            }
-
-            if (deleteOriginal && result.sourceDeleteFailedCount > 0 && result.importedCount > 0) {
+            }.onSuccess { groups ->
                 _localState.update {
                     it.copy(
-                        pendingSourceDeletePrompt = PendingSourceDeletePrompt(
-                            importedCount = result.importedCount,
-                            autoDeletedCount = result.deletedCount,
-                            items = result.pendingSourceDeletes
+                        duplicateScanState = DuplicateScanUiState(
+                            isScanning = false,
+                            hasScanned = true,
+                            groups = groups
                         )
                     )
                 }
-            } else {
-                _events.tryEmit(VaultEvent.ShowMessage(msg))
+            }.onFailure { err ->
+                _localState.update {
+                    it.copy(
+                        duplicateScanState = it.duplicateScanState.copy(isScanning = false)
+                    )
+                }
+                _events.tryEmit(
+                    VaultEvent.ShowMessage("Gagal memindai duplikat: ${err.localizedMessage ?: "kesalahan"}")
+                )
             }
         }
     }
 
-    fun dismissPendingSourceDeletePrompt() {
-        _localState.update { it.copy(pendingSourceDeletePrompt = null) }
-    }
-
-    fun onSystemSourceDeleteCompleted(deletedCount: Int) {
-        _localState.update { it.copy(pendingSourceDeletePrompt = null) }
-        if (deletedCount > 0) {
-            _events.tryEmit(VaultEvent.ShowMessage("$deletedCount file asli berhasil dihapus dari Galeri"))
-        } else {
-            _events.tryEmit(VaultEvent.ShowMessage("File tetap terenkripsi di Locker; file sumber tidak dihapus"))
+    fun deleteDuplicateFiles(fileIds: List<String>) {
+        if (fileIds.isEmpty()) return
+        viewModelScope.launch {
+            runCatching { repository.deleteFiles(fileIds) }
+                .onSuccess {
+                    _events.tryEmit(VaultEvent.ShowMessage("${fileIds.size} file duplikat berhasil dihapus permanen"))
+                    scanForDuplicates()
+                }
+                .onFailure { error ->
+                    _events.tryEmit(VaultEvent.ShowMessage("Penghapusan gagal: ${error.localizedMessage ?: "kesalahan"}"))
+                }
         }
-    }
-
-    fun onSystemSourceDeleteUnavailable() {
-        _localState.update { it.copy(pendingSourceDeletePrompt = null) }
-        _events.tryEmit(
-            VaultEvent.ShowSourceAccessSuggestion(
-                "File sudah terenkripsi di Locker. Sumber tidak mendukung konfirmasi hapus langsung — hubungkan folder sumber untuk hapus otomatis."
-            )
-        )
     }
 
     fun moveFilesToAlbum(fileIds: List<String>, targetAlbumId: String) {
@@ -590,26 +613,18 @@ class BrankasViewModel(
     fun exportFilesToDeviceGallery(fileIds: List<String>, removeFromVault: Boolean) {
         if (fileIds.isEmpty()) return
         viewModelScope.launch {
-            _localState.update {
-                it.copy(
-                    importProgress = ImportProgressState(
-                        processed = 0,
-                        total = fileIds.size,
-                        currentFileName = "Mengeluarkan 0/${fileIds.size} file ke Galeri/Unduhan..."
-                    )
-                )
-            }
+            _exportProgress.value = ImportProgressState(
+                processed = 0,
+                total = fileIds.size,
+                currentFileName = "Mengeluarkan 0/${fileIds.size} file ke Galeri/Unduhan..."
+            )
             try {
                 val outcome = repository.exportFilesToMediaStore(fileIds, removeFromVault) { done, total ->
-                    _localState.update {
-                        it.copy(
-                            importProgress = ImportProgressState(
-                                processed = done,
-                                total = total,
-                                currentFileName = "Mengeluarkan $done/$total file ke Galeri/Unduhan..."
-                            )
-                        )
-                    }
+                    _exportProgress.value = ImportProgressState(
+                        processed = done,
+                        total = total,
+                        currentFileName = "Mengeluarkan $done/$total file ke Galeri/Unduhan..."
+                    )
                 }
                 emitBatchExportSummary(outcome, destinationLabel = "Galeri/Unduhan", removeFromVault = removeFromVault)
             } catch (err: Throwable) {
@@ -617,7 +632,7 @@ class BrankasViewModel(
                     VaultEvent.ShowMessage("Gagal mengeluarkan file: ${err.localizedMessage ?: "kesalahan"}")
                 )
             } finally {
-                _localState.update { it.copy(importProgress = null) }
+                _exportProgress.value = null
             }
         }
     }
@@ -626,26 +641,18 @@ class BrankasViewModel(
         clearExternalPickerFlag()
         if (fileIds.isEmpty()) return
         viewModelScope.launch {
-            _localState.update {
-                it.copy(
-                    importProgress = ImportProgressState(
-                        processed = 0,
-                        total = fileIds.size,
-                        currentFileName = "Mengeluarkan 0/${fileIds.size} file ke folder..."
-                    )
-                )
-            }
+            _exportProgress.value = ImportProgressState(
+                processed = 0,
+                total = fileIds.size,
+                currentFileName = "Mengeluarkan 0/${fileIds.size} file ke folder..."
+            )
             try {
                 val outcome = repository.exportFilesToFolder(fileIds, folderUri, removeFromVault) { done, total ->
-                    _localState.update {
-                        it.copy(
-                            importProgress = ImportProgressState(
-                                processed = done,
-                                total = total,
-                                currentFileName = "Mengeluarkan $done/$total file ke folder..."
-                            )
-                        )
-                    }
+                    _exportProgress.value = ImportProgressState(
+                        processed = done,
+                        total = total,
+                        currentFileName = "Mengeluarkan $done/$total file ke folder..."
+                    )
                 }
                 val folderName = runCatching { repository.getSourceFolderDisplayName(folderUri) }
                     .getOrDefault("folder tujuan")
@@ -655,7 +662,7 @@ class BrankasViewModel(
                     VaultEvent.ShowMessage("Gagal mengeluarkan file: ${err.localizedMessage ?: "kesalahan"}")
                 )
             } finally {
-                _localState.update { it.copy(importProgress = null) }
+                _exportProgress.value = null
             }
         }
     }
@@ -1009,7 +1016,11 @@ class BrankasViewModel(
                 val app = checkNotNull(
                     extras[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY]
                 ) as BrankasKuApp
-                return BrankasViewModel(app, app.vaultRepository) as T
+                return BrankasViewModel(
+                    application = app,
+                    repository = app.vaultRepository,
+                    encryptionCoordinator = app.backgroundEncryptionCoordinator
+                ) as T
             }
         }
     }

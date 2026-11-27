@@ -120,6 +120,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.DialogProperties
 import com.example.data.AlbumWithStats
 import com.example.data.MediaCategory
 import com.example.data.VaultFileEntity
@@ -774,7 +775,11 @@ fun SecureViewerScreen(
 
     if (showDeleteConfirm) {
         AlertDialog(
-            onDismissRequest = { showDeleteConfirm = false },
+            onDismissRequest = {},
+            properties = DialogProperties(
+                dismissOnBackPress = false,
+                dismissOnClickOutside = false
+            ),
             title = { Text("Hapus Permanen?") },
             text = { Text("\"${activeFile.originalName}\" akan dihapus permanen dari penyimpanan terenkripsi.") },
             confirmButton = {
@@ -793,11 +798,11 @@ fun SecureViewerScreen(
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                 ) {
-                    Text("Hapus")
+                    Text("Hapus Permanen")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteConfirm = false }) { Text("Batal") }
+                TextButton(onClick = { showDeleteConfirm = false }) { Text("Batalkan") }
             }
         )
     }

@@ -258,16 +258,28 @@ class VaultCryptoEngine(
         return totalSizeOffset
     }
 
+    data class EncryptFileResult(
+        val totalPlaintextSize: Long,
+        val sha256Hex: String
+    )
+
     /**
      * Streams plaintext from [input] into [destFile] with AES-256-GCM chunked encryption
-     * and records the exact total plaintext byte count in the file header.
+     * and records the exact total plaintext byte count in the file header while computing SHA-256.
      */
     fun encryptToFile(
         input: InputStream,
         destFile: File,
         overrideKey: SecretKey? = null
-    ): Long {
+    ): Long = encryptToFileWithHash(input, destFile, overrideKey).totalPlaintextSize
+
+    fun encryptToFileWithHash(
+        input: InputStream,
+        destFile: File,
+        overrideKey: SecretKey? = null
+    ): EncryptFileResult {
         var totalBytes = 0L
+        val digest = MessageDigest.getInstance("SHA-256")
         val bufferedIn = if (input is BufferedInputStream || input is ByteArrayInputStream) {
             input
         } else {
@@ -276,13 +288,19 @@ class VaultCryptoEngine(
         val countingInput = object : InputStream() {
             override fun read(): Int {
                 val b = bufferedIn.read()
-                if (b != -1) totalBytes++
+                if (b != -1) {
+                    totalBytes++
+                    digest.update(b.toByte())
+                }
                 return b
             }
 
             override fun read(b: ByteArray, off: Int, len: Int): Int {
                 val n = bufferedIn.read(b, off, len)
-                if (n > 0) totalBytes += n
+                if (n > 0) {
+                    totalBytes += n
+                    digest.update(b, off, n)
+                }
                 return n
             }
         }
@@ -293,7 +311,28 @@ class VaultCryptoEngine(
             raf.seek(totalSizeOffset)
             raf.writeLong(totalBytes)
         }
-        return totalBytes
+        val hex = digest.digest().joinToString("") { "%02x".format(it) }
+        return EncryptFileResult(totalPlaintextSize = totalBytes, sha256Hex = hex)
+    }
+
+    fun computePlaintextSha256(
+        encryptedFile: File,
+        overrideKey: SecretKey? = null
+    ): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val digestOut = object : OutputStream() {
+            override fun write(b: Int) {
+                digest.update(b.toByte())
+            }
+
+            override fun write(b: ByteArray, off: Int, len: Int) {
+                if (len > 0) digest.update(b, off, len)
+            }
+        }
+        BufferedInputStream(encryptedFile.inputStream(), IO_BUFFER_SIZE).use { input ->
+            decryptStream(input, digestOut, overrideKey)
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
     fun decryptStream(

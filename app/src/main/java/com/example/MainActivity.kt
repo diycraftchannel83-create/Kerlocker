@@ -1,9 +1,11 @@
 package com.example
 
+import android.Manifest
 import android.app.Activity
 import android.content.ContentResolver
 import android.content.Intent
 import android.content.IntentSender
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -15,6 +17,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.layout.Arrangement
@@ -43,7 +46,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -58,6 +63,7 @@ import com.example.data.VaultFileFilter
 import com.example.ui.BrankasViewModel
 import com.example.ui.VaultEvent
 import com.example.ui.screens.AlbumDetailScreen
+import com.example.ui.screens.DuplicateTrackerScreen
 import com.example.ui.screens.ExternalVaultScreen
 import com.example.ui.screens.SecureViewerScreen
 import com.example.ui.screens.SettingsScreen
@@ -97,6 +103,9 @@ data class RouteExternalViewer(
     val sizeBytes: Long,
     val createdAt: Long
 )
+
+@Serializable
+object RouteDuplicateTracker
 
 class MainActivity : FragmentActivity() {
 
@@ -197,6 +206,28 @@ class MainActivity : FragmentActivity() {
                 }
             }
 
+            var requestedNotifPerm by remember { mutableStateOf(false) }
+            val notifPermLauncher = rememberLauncherForActivityResult(
+                contract = ActivityResultContracts.RequestPermission()
+            ) {
+                viewModel.clearExternalPickerFlag()
+            }
+            val isImportRunning = uiState.importProgress != null
+            LaunchedEffect(isImportRunning) {
+                if (isImportRunning &&
+                    !requestedNotifPerm &&
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                    ContextCompat.checkSelfPermission(
+                        this@MainActivity,
+                        Manifest.permission.POST_NOTIFICATIONS
+                    ) != PackageManager.PERMISSION_GRANTED
+                ) {
+                    requestedNotifPerm = true
+                    viewModel.markLaunchingExternalPicker()
+                    notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+            }
+
             LaunchedEffect(Unit) {
                 viewModel.events.collect { event ->
                     when (event) {
@@ -249,7 +280,11 @@ class MainActivity : FragmentActivity() {
                         val deletePrompt = uiState.pendingSourceDeletePrompt
                         if (!uiState.isLocked && deletePrompt != null) {
                             AlertDialog(
-                                onDismissRequest = viewModel::dismissPendingSourceDeletePrompt,
+                                onDismissRequest = {},
+                                properties = DialogProperties(
+                                    dismissOnBackPress = false,
+                                    dismissOnClickOutside = false
+                                ),
                                 title = { Text("Konfirmasi Hapus File Asli") },
                                 text = {
                                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -278,7 +313,7 @@ class MainActivity : FragmentActivity() {
                                             )
                                         }
                                         Text(
-                                            text = "Konfirmasi untuk menghapus file asli yang sudah terenkripsi dari Galeri?",
+                                            text = "Pilih Hapus Permanen untuk menghapus file asli dari Galeri, atau Batalkan untuk tetap menyimpannya.",
                                             style = MaterialTheme.typography.bodySmall
                                         )
                                     }
@@ -312,14 +347,18 @@ class MainActivity : FragmentActivity() {
                                         },
                                         colors = ButtonDefaults.buttonColors(
                                             containerColor = MaterialTheme.colorScheme.error
-                                        )
+                                        ),
+                                        modifier = Modifier.testTag("source_delete_confirm_button")
                                     ) {
-                                        Text("Hapus File Asli")
+                                        Text("Hapus Permanen")
                                     }
                                 },
                                 dismissButton = {
-                                    TextButton(onClick = viewModel::dismissPendingSourceDeletePrompt) {
-                                        Text("Biarkan")
+                                    TextButton(
+                                        onClick = viewModel::dismissPendingSourceDeletePrompt,
+                                        modifier = Modifier.testTag("source_delete_cancel_button")
+                                    ) {
+                                        Text("Batalkan")
                                     }
                                 }
                             )
@@ -401,6 +440,7 @@ private fun VaultNavGraph(viewModel: BrankasViewModel) {
                 onLockNow = viewModel::lockVault,
                 onOpenSettings = { navController.navigate(RouteSettings) },
                 onOpenExternalVault = { navController.navigate(RouteExternalVault) },
+                onOpenDuplicateTracker = { navController.navigate(RouteDuplicateTracker) },
                 onSortOrderChange = viewModel::setGallerySortOrder,
                 loadThumbnail = viewModel::loadThumbnail
             )
@@ -636,6 +676,19 @@ private fun VaultNavGraph(viewModel: BrankasViewModel) {
                 onThemeChange = viewModel::setThemePreference,
                 onChangePin = viewModel::changePin,
                 onBiometricError = viewModel::emitMessage
+            )
+        }
+
+        composable<RouteDuplicateTracker> {
+            DuplicateTrackerScreen(
+                uiState = uiState,
+                onBack = { navController.popBackStack() },
+                onScanDuplicates = viewModel::scanForDuplicates,
+                onDeleteDuplicateFiles = viewModel::deleteDuplicateFiles,
+                onOpenFile = { fileId ->
+                    navController.navigate(RouteSecureViewer(fileId = fileId))
+                },
+                loadThumbnail = viewModel::loadThumbnail
             )
         }
     }

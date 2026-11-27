@@ -83,6 +83,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import com.example.data.AlbumEntity
 import com.example.data.AlbumWithStats
 import com.example.data.GallerySortOrder
@@ -372,6 +373,12 @@ fun AlbumDetailScreen(
                             if (progress.total > 0) progress.processed.toFloat() / progress.total else 0f
                         },
                         modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Enkripsi berjalan di latar belakang • Anda tetap dapat beralih aplikasi.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -732,7 +739,11 @@ fun AlbumDetailScreen(
 
     deleteTargetIds?.let { ids ->
         AlertDialog(
-            onDismissRequest = { deleteTargetIds = null },
+            onDismissRequest = {},
+            properties = DialogProperties(
+                dismissOnBackPress = false,
+                dismissOnClickOutside = false
+            ),
             title = { Text("Hapus ${ids.size} File Permanen?") },
             text = { Text("File terenkripsi yang dihapus tidak dapat dipulihkan lagi.") },
             confirmButton = {
@@ -750,7 +761,7 @@ fun AlbumDetailScreen(
             },
             dismissButton = {
                 TextButton(onClick = { deleteTargetIds = null }) {
-                    Text("Batal")
+                    Text("Batalkan")
                 }
             }
         )

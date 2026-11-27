@@ -67,7 +67,8 @@ data class VaultFileEntity(
     val encryptedThumbName: String?,
     val encryptionAlgorithm: String = "AES-256-GCM",
     val createdAt: Long = System.currentTimeMillis(),
-    val isFavorite: Boolean = false
+    val isFavorite: Boolean = false,
+    val contentHash: String? = null
 )
 
 data class AlbumWithStats(
@@ -137,6 +138,46 @@ enum class GallerySortOrder(
             compareByDescending<VaultFileEntity> { it.originalSizeBytes }
                 .thenByDescending { it.createdAt }
         )
+    }
+}
+
+data class DuplicateGroup(
+    val contentHash: String,
+    val fileSizeBytes: Long,
+    val files: List<VaultFileEntity>
+) {
+    val duplicateCount: Int get() = (files.size - 1).coerceAtLeast(0)
+    val reclaimableBytes: Long get() = fileSizeBytes * duplicateCount
+}
+
+object DuplicateDetector {
+    fun groupExactDuplicates(files: List<VaultFileEntity>): List<DuplicateGroup> {
+        return files
+            .filter { !it.contentHash.isNullOrBlank() }
+            .groupBy { it.contentHash!! }
+            .values
+            .filter { it.size > 1 }
+            .map { group ->
+                // Keep favorite first, then oldest imported copy at index 0
+                val ordered = group.sortedWith(
+                    compareByDescending<VaultFileEntity> { it.isFavorite }
+                        .thenBy { it.createdAt }
+                        .thenBy { it.originalName.lowercase() }
+                )
+                val size = ordered.maxOfOrNull { it.originalSizeBytes } ?: 0L
+                DuplicateGroup(
+                    contentHash = ordered.first().contentHash!!,
+                    fileSizeBytes = size,
+                    files = ordered
+                )
+            }
+            .sortedByDescending { it.reclaimableBytes }
+    }
+
+    fun selectRecommendedCopiesToDelete(groups: List<DuplicateGroup>): Set<String> {
+        return groups.flatMap { group ->
+            if (group.files.size <= 1) emptyList() else group.files.drop(1).map { it.id }
+        }.toSet()
     }
 }
 

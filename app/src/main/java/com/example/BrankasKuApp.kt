@@ -8,6 +8,7 @@ import com.example.data.SecurityPreferencesDataStore
 import com.example.data.VaultDatabase
 import com.example.data.VaultRepository
 import com.example.data.VaultStorageManager
+import com.example.service.BackgroundEncryptionCoordinator
 
 class BrankasKuApp : Application() {
     val masterKeyProvider by lazy { AndroidKeystoreMasterKeyProvider() }
@@ -30,5 +31,8 @@ class BrankasKuApp : Application() {
             masterKeyProvider = masterKeyProvider,
             vaultKeyManager = vaultKeyManager
         )
+    }
+    val backgroundEncryptionCoordinator by lazy {
+        BackgroundEncryptionCoordinator(this, vaultRepository)
     }
 }

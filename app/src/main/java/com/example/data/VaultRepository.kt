@@ -167,6 +167,8 @@ class VaultRepository(
         }
     }
 
+    fun getActiveVaultKey(): SecretKey? = vaultKeyManager.getActiveVaultKey()
+
     suspend fun ensureActiveVaultKeyLoaded(pinIfAvailable: String? = null) {
         val state = securityPrefs.preferencesFlow.first()
         if (vaultKeyManager.getActiveVaultKey() != null) {
@@ -551,6 +553,7 @@ class VaultRepository(
         uris: List<Uri>,
         albumId: String,
         deleteOriginal: Boolean,
+        overrideKey: SecretKey? = null,
         onProgress: (processed: Int, total: Int) -> Unit
     ): BatchImportResult {
         if (uris.isEmpty()) {
@@ -572,7 +575,7 @@ class VaultRepository(
                 async(Dispatchers.IO) {
                     semaphore.withPermit {
                         val result = runCatching {
-                            val outcome = storageManager.importUri(uri, albumId, deleteOriginal)
+                            val outcome = storageManager.importUri(uri, albumId, deleteOriginal, overrideKey)
                             dbAndSessionMutex.withLock {
                                 try {
                                     dao.insertFile(outcome.entity)
@@ -765,6 +768,40 @@ class VaultRepository(
             syncManifestToExternalFolderIfConnected()
         }
         return savedEntity
+    }
+
+    suspend fun scanForDuplicates(
+        onProgress: (scanned: Int, total: Int) -> Unit = { _, _ -> }
+    ): List<DuplicateGroup> = withContext(Dispatchers.IO) {
+        val allFiles = dao.getAllFilesForMirror()
+        if (allFiles.size < 2) {
+            onProgress(allFiles.size, allFiles.size)
+            return@withContext emptyList()
+        }
+
+        val countBySize = allFiles.groupingBy { it.originalSizeBytes }.eachCount()
+        val needsHash = allFiles.filter { file ->
+            file.contentHash.isNullOrBlank() &&
+                ((countBySize[file.originalSizeBytes] ?: 0) > 1 || file.originalSizeBytes <= 0L)
+        }
+
+        val totalToScan = needsHash.size
+        val computedHashes = mutableMapOf<String, String>()
+        needsHash.forEachIndexed { idx, file ->
+            runCatching {
+                storageManager.computePlaintextSha256(file)
+            }.onSuccess { hash ->
+                computedHashes[file.id] = hash
+                dao.updateContentHash(file.id, hash)
+            }
+            onProgress(idx + 1, totalToScan)
+        }
+
+        val resolved = allFiles.map { file ->
+            val newHash = computedHashes[file.id]
+            if (newHash != null) file.copy(contentHash = newHash) else file
+        }
+        DuplicateDetector.groupExactDuplicates(resolved)
     }
 
     suspend fun deleteFiles(fileIds: List<String>) {

@@ -826,6 +826,8 @@ class VaultStorageManager(
                 }
             }
 
+            val contentSha256 = runCatching { computeFileSha256(plaintextTemp) }.getOrNull()
+
             VaultFileEntity(
                 id = id,
                 albumId = albumId,
@@ -837,7 +839,8 @@ class VaultStorageManager(
                 encryptedThumbName = encryptedThumbName,
                 encryptionAlgorithm = "AES-256-GCM",
                 createdAt = manifestEntry?.createdAt?.takeIf { it > 0L } ?: System.currentTimeMillis(),
-                isFavorite = manifestEntry?.isFavorite ?: false
+                isFavorite = manifestEntry?.isFavorite ?: false,
+                contentHash = contentSha256
             )
         } catch (error: Throwable) {
             internalBlob?.let(::secureDeleteFile)
@@ -962,7 +965,8 @@ class VaultStorageManager(
     suspend fun importUri(
         uri: Uri,
         albumId: String,
-        deleteOriginal: Boolean
+        deleteOriginal: Boolean,
+        overrideKey: SecretKey? = null
     ): ImportedFileOutcome = withContext(Dispatchers.IO) {
         val resolver = context.contentResolver
         val (displayName, queriedSize) = runCatching { queryDisplayNameAndSize(uri) }
@@ -977,18 +981,22 @@ class VaultStorageManager(
 
         var encryptedThumbName: String? = null
         try {
-            val actualPlainSize = resolver.openInputStream(uri)?.buffered()?.use { input ->
-                cryptoEngine.encryptToFile(input, destBlobFile)
+            val encryptResult = resolver.openInputStream(uri)?.buffered()?.use { input ->
+                cryptoEngine.encryptToFileWithHash(input, destBlobFile, overrideKey)
             } ?: throw IllegalStateException("Tidak dapat membaca file sumber")
 
-            val finalSize = if (actualPlainSize > 0) actualPlainSize else queriedSize.coerceAtLeast(0L)
+            val finalSize = if (encryptResult.totalPlaintextSize > 0) {
+                encryptResult.totalPlaintextSize
+            } else {
+                queriedSize.coerceAtLeast(0L)
+            }
 
             if (category == MediaCategory.IMAGE || category == MediaCategory.VIDEO) {
                 val thumbBytes = createThumbnailJpeg(uri, category)
                 if (thumbBytes != null && thumbBytes.isNotEmpty()) {
                     val thumbName = "$fileId.thm"
                     val thumbFile = File(thumbsDir, thumbName)
-                    thumbFile.writeBytes(cryptoEngine.encryptBytes(thumbBytes))
+                    thumbFile.writeBytes(cryptoEngine.encryptBytes(thumbBytes, overrideKey))
                     encryptedThumbName = thumbName
                     thumbBytes.fill(0)
                 }
@@ -1004,7 +1012,8 @@ class VaultStorageManager(
                 encryptedFileName = encryptedBlobName,
                 encryptedThumbName = encryptedThumbName,
                 encryptionAlgorithm = "AES-256-GCM",
-                createdAt = System.currentTimeMillis()
+                createdAt = System.currentTimeMillis(),
+                contentHash = encryptResult.sha256Hex
             )
 
             val resolvedMediaUri = if (deleteOriginal) {
@@ -1613,6 +1622,9 @@ class VaultStorageManager(
             throw IllegalArgumentException("Hasil edit gambar kosong")
         }
         val activeKey = vaultKeyManager.getActiveVaultKey()
+        val contentSha256 = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(newPlainBytes)
+            .joinToString("") { "%02x".format(it) }
 
         if (overwriteOriginal) {
             val targetBlob = File(blobsDir, sourceFile.encryptedFileName)
@@ -1644,7 +1656,8 @@ class VaultStorageManager(
                 sourceFile.copy(
                     mimeType = targetMimeType,
                     originalSizeBytes = newPlainBytes.size.toLong(),
-                    encryptedThumbName = if (hasNewThumb) thumbName else sourceFile.encryptedThumbName
+                    encryptedThumbName = if (hasNewThumb) thumbName else sourceFile.encryptedThumbName,
+                    contentHash = contentSha256
                 )
             } catch (t: Throwable) {
                 secureDeleteFile(tempBlob)
@@ -1688,7 +1701,8 @@ class VaultStorageManager(
                     encryptedThumbName = newThumbName,
                     encryptionAlgorithm = "AES-256-GCM",
                     createdAt = System.currentTimeMillis(),
-                    isFavorite = false
+                    isFavorite = false,
+                    contentHash = contentSha256
                 )
             } catch (t: Throwable) {
                 secureDeleteFile(newBlobFile)
@@ -1696,6 +1710,24 @@ class VaultStorageManager(
                 throw t
             }
         }
+    }
+
+    suspend fun computePlaintextSha256(fileEntity: VaultFileEntity): String = withContext(Dispatchers.IO) {
+        val blobFile = File(blobsDir, fileEntity.encryptedFileName)
+        cryptoEngine.computePlaintextSha256(blobFile)
+    }
+
+    private fun computeFileSha256(file: File): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        val buf = ByteArray(64 * 1024)
+        file.inputStream().buffered().use { input ->
+            while (true) {
+                val read = input.read(buf)
+                if (read <= 0) break
+                digest.update(buf, 0, read)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
     private fun replaceFileAtomically(sourceTemp: File, destination: File) {

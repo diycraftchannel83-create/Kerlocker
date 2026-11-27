@@ -42,6 +42,7 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
+import androidx.compose.material.icons.rounded.FileCopy
 import androidx.compose.material.icons.rounded.FolderSpecial
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LockOpen
@@ -91,6 +92,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import com.example.R
 import com.example.data.AlbumEntity
 import com.example.data.AlbumWithStats
@@ -136,6 +138,7 @@ fun VaultHomeScreen(
     onLockNow: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenExternalVault: () -> Unit,
+    onOpenDuplicateTracker: () -> Unit = {},
     onSortOrderChange: (GallerySortOrder) -> Unit,
     loadThumbnail: suspend (VaultFileEntity) -> Bitmap?
 ) {
@@ -269,6 +272,15 @@ fun VaultHomeScreen(
                     },
                     actions = {
                         IconButton(
+                            onClick = onOpenDuplicateTracker,
+                            modifier = Modifier.testTag("duplicate_tracker_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.FileCopy,
+                                contentDescription = "Lacak File Duplikat"
+                            )
+                        }
+                        IconButton(
                             onClick = onOpenExternalVault,
                             modifier = Modifier.testTag("external_vault_button")
                         ) {
@@ -397,6 +409,12 @@ fun VaultHomeScreen(
                                         } else 0f
                                     },
                                     modifier = Modifier.fillMaxWidth()
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                    text = "Proses berjalan di latar belakang — Anda dapat keluar atau membuka menu lain.",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
                                 )
                             }
                         }
@@ -822,7 +840,11 @@ fun VaultHomeScreen(
 
     deletingFileIds?.let { ids ->
         AlertDialog(
-            onDismissRequest = { deletingFileIds = null },
+            onDismissRequest = {},
+            properties = DialogProperties(
+                dismissOnBackPress = false,
+                dismissOnClickOutside = false
+            ),
             title = { Text("Hapus ${ids.size} File Permanen?") },
             text = { Text("File terenkripsi yang dihapus tidak dapat dipulihkan lagi.") },
             confirmButton = {
@@ -840,7 +862,7 @@ fun VaultHomeScreen(
             },
             dismissButton = {
                 TextButton(onClick = { deletingFileIds = null }) {
-                    Text("Batal")
+                    Text("Batalkan")
                 }
             }
         )

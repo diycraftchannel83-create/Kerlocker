@@ -15,21 +15,28 @@ import com.example.crypto.MasterKeyProvider
 import com.example.crypto.VaultCryptoEngine
 import com.example.crypto.VaultKeyManager
 import com.example.data.AlbumEntity
+import com.example.data.DuplicateDetector
 import com.example.data.GallerySortOrder
 import com.example.data.MediaCategory
 import com.example.data.MediaUriResolver
+import com.example.data.SecurityPreferencesDataStore
 import com.example.data.VaultBackupAlbum
 import com.example.data.VaultBackupFile
 import com.example.data.VaultBackupManifest
 import com.example.data.VaultDatabase
 import com.example.data.VaultFileEntity
 import com.example.data.VaultFileFilter
+import com.example.data.VaultRepository
+import com.example.data.VaultStorageManager
+import com.example.service.BackgroundEncryptionCoordinator
 import com.example.ui.components.GalleryNavigationHelper
 import com.example.ui.components.ImageAdjustmentParams
 import com.example.ui.components.ImageAdjustmentProcessor
 import com.example.ui.components.SlideAxis
 import com.example.ui.components.SlideNavigationAction
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertArrayEquals
@@ -47,6 +54,7 @@ import org.robolectric.annotation.Config
 import java.io.ByteArrayOutputStream
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.security.MessageDigest
 import javax.crypto.AEADBadTagException
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -687,5 +695,178 @@ class ExampleRobolectricTest {
 
         val appContext = ApplicationProvider.getApplicationContext<Context>()
         assertNull(appContext.findFragmentActivity())
+    }
+
+    @Test
+    fun `encryptToFileWithHash and computePlaintextSha256 produce identical SHA-256 digests`() {
+        val keystore = InMemoryMasterKeyProvider()
+        val keyManager = VaultKeyManager(keystore)
+        val portableKey = keyManager.generatePortableMasterKey()
+        val engine = VaultCryptoEngine(keystore, portableMasterKeyProvider = { portableKey })
+
+        val plainBytes = Random(2026).nextBytes(310_000)
+        val expectedHash = MessageDigest.getInstance("SHA-256")
+            .digest(plainBytes)
+            .joinToString("") { "%02x".format(it) }
+
+        val encryptedFile = File.createTempFile("hash_test_", ".vault")
+        try {
+            val result = engine.encryptToFileWithHash(ByteArrayInputStream(plainBytes), encryptedFile)
+            assertEquals(plainBytes.size.toLong(), result.totalPlaintextSize)
+            assertEquals(expectedHash, result.sha256Hex)
+
+            val streamingHash = engine.computePlaintextSha256(encryptedFile)
+            assertEquals(expectedHash, streamingHash)
+        } finally {
+            encryptedFile.delete()
+        }
+    }
+
+    @Test
+    fun `duplicate detector and repository scanForDuplicates backfill legacy hashes and safely delete redundant copies`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val db = Room.inMemoryDatabaseBuilder(context, VaultDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        val keystore = InMemoryMasterKeyProvider()
+        val keyManager = VaultKeyManager(keystore)
+        val portableKey = keyManager.generatePortableMasterKey()
+        keyManager.setActiveVaultKey(portableKey)
+        val engine = VaultCryptoEngine(keystore, portableMasterKeyProvider = { keyManager.getActiveVaultKey() })
+        val storage = VaultStorageManager(context, engine, keyManager)
+        val prefs = SecurityPreferencesDataStore(context)
+        val repo = VaultRepository(db.vaultDao(), storage, prefs, keystore, keyManager)
+
+        val blobsDir = File(context.filesDir, "secure_vault/blobs").apply { mkdirs() }
+        val dupPayload = Random(404).nextBytes(4096)
+        val uniquePayload = Random(505).nextBytes(4096) // Same size as dupPayload, different content!
+
+        val createdFiles = mutableListOf<VaultFileEntity>()
+        try {
+            val dao = db.vaultDao()
+            val alb1 = AlbumEntity(id = "alb-dup-1", name = "Foto Utama", iconKey = "photo", colorHex = 0xFF10B981L)
+            val alb2 = AlbumEntity(id = "alb-dup-2", name = "Arsip", iconKey = "lock", colorHex = 0xFF06B6D4L)
+            dao.insertAlbums(listOf(alb1, alb2))
+
+            fun createEncryptedEntry(
+                id: String,
+                albumId: String,
+                name: String,
+                payload: ByteArray,
+                createdAt: Long,
+                isFavorite: Boolean,
+                precomputedHash: String?
+            ): VaultFileEntity {
+                val blob = File(blobsDir, "$id.vlt")
+                val res = engine.encryptToFileWithHash(ByteArrayInputStream(payload), blob)
+                val entity = VaultFileEntity(
+                    id = id,
+                    albumId = albumId,
+                    originalName = name,
+                    mimeType = "image/jpeg",
+                    category = MediaCategory.IMAGE,
+                    originalSizeBytes = res.totalPlaintextSize,
+                    encryptedFileName = blob.name,
+                    encryptedThumbName = null,
+                    createdAt = createdAt,
+                    isFavorite = isFavorite,
+                    contentHash = precomputedHash
+                )
+                createdFiles.add(entity)
+                return entity
+            }
+
+            // Copy 1: older, non-favorite, legacy null contentHash -> should be backfilled
+            val dupOlder = createEncryptedEntry("dup-1-${System.nanoTime()}", alb1.id, "pantai_1.jpg", dupPayload, 1000L, false, null)
+            // Copy 2: newer, favorite -> DuplicateDetector should preserve this as index 0 (primary)
+            val dupFavorite = createEncryptedEntry("dup-2-${System.nanoTime()}", alb2.id, "pantai_fav.jpg", dupPayload, 2000L, true, null)
+            // Same byte size (4096) but different content -> must NOT be grouped as duplicate
+            val sameSizeUnique = createEncryptedEntry("uniq-${System.nanoTime()}", alb1.id, "lainnya.jpg", uniquePayload, 1500L, false, null)
+
+            dao.insertFile(dupOlder)
+            dao.insertFile(dupFavorite)
+            dao.insertFile(sameSizeUnique)
+
+            val groups = repo.scanForDuplicates()
+            assertEquals(1, groups.size)
+            val group = groups.first()
+            assertEquals(2, group.files.size)
+            // Favorite copy is kept first; older non-favorite copy is recommended for deletion
+            assertEquals(dupFavorite.id, group.files.first().id)
+            val recommendedDelete = DuplicateDetector.selectRecommendedCopiesToDelete(groups)
+            assertEquals(setOf(dupOlder.id), recommendedDelete)
+
+            // Legacy hashes were persisted in DB
+            assertNotNull(dao.getFileById(dupOlder.id)?.contentHash)
+            assertNotNull(dao.getFileById(sameSizeUnique.id)?.contentHash)
+
+            // Deleting only the recommended redundant copy preserves the favorite copy & unique file
+            repo.deleteFiles(recommendedDelete.toList())
+            assertNull(dao.getFileById(dupOlder.id))
+            assertNotNull(dao.getFileById(dupFavorite.id))
+            assertNotNull(dao.getFileById(sameSizeUnique.id))
+            assertTrue(repo.scanForDuplicates().isEmpty())
+        } finally {
+            createdFiles.forEach { runCatching { storage.deleteEncryptedAssets(it) } }
+            db.close()
+        }
+    }
+
+    @Test
+    fun `background encryption coordinator processes queued file populates hash and sets pending source delete`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val db = Room.inMemoryDatabaseBuilder(context, VaultDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        val keystore = InMemoryMasterKeyProvider()
+        val keyManager = VaultKeyManager(keystore)
+        val portableKey = keyManager.generatePortableMasterKey()
+        keyManager.setActiveVaultKey(portableKey)
+        val engine = VaultCryptoEngine(keystore, portableMasterKeyProvider = { keyManager.getActiveVaultKey() })
+        val storage = VaultStorageManager(context, engine, keyManager)
+        val prefs = SecurityPreferencesDataStore(context)
+        val repo = VaultRepository(db.vaultDao(), storage, prefs, keystore, keyManager)
+        val coordinator = BackgroundEncryptionCoordinator(context, repo)
+
+        val tempSource = File.createTempFile("bg_import_src_", ".jpg")
+        tempSource.writeBytes(Random(909).nextBytes(8192))
+        val expectedHash = MessageDigest.getInstance("SHA-256")
+            .digest(tempSource.readBytes())
+            .joinToString("") { "%02x".format(it) }
+
+        val importedEntities = mutableListOf<VaultFileEntity>()
+        try {
+            val dao = db.vaultDao()
+            val album = AlbumEntity(id = "alb-bg", name = "Background", iconKey = "photo", colorHex = 0xFF10B981L)
+            dao.insertAlbum(album)
+
+            // Enqueue with deleteOriginal=true on a file:// URI where automatic MediaStore delete cannot silently delete
+            coordinator.enqueueImport(
+                uris = listOf(Uri.fromFile(tempSource)),
+                albumId = album.id,
+                deleteOriginal = true
+            )
+
+            val prompt = withTimeout(10_000L) {
+                coordinator.pendingSourceDeleteFlow.first { it != null }
+            }
+            assertNotNull(prompt)
+            assertEquals(1, prompt!!.importedCount)
+            assertEquals(1, prompt.items.size)
+
+            val filesInAlbum = dao.getFilesInAlbumSync(album.id)
+            importedEntities.addAll(filesInAlbum)
+            assertEquals(1, filesInAlbum.size)
+            assertEquals(expectedHash, filesInAlbum.first().contentHash)
+            assertEquals(tempSource.length(), filesInAlbum.first().originalSizeBytes)
+
+            // Dismiss via explicit cancel action clears prompt
+            coordinator.dismissPendingSourceDeletePrompt()
+            assertNull(coordinator.pendingSourceDeleteFlow.value)
+        } finally {
+            importedEntities.forEach { runCatching { storage.deleteEncryptedAssets(it) } }
+            tempSource.delete()
+            db.close()
+        }
     }
 }

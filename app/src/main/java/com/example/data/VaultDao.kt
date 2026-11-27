@@ -83,6 +83,9 @@ interface VaultDao {
     @Query("UPDATE vault_files SET isFavorite = :favorite WHERE id = :fileId")
     suspend fun setFavorite(fileId: String, favorite: Boolean)
 
+    @Query("UPDATE vault_files SET contentHash = :hash WHERE id = :fileId")
+    suspend fun updateContentHash(fileId: String, hash: String)
+
     @Query("DELETE FROM vault_files WHERE id IN (:fileIds)")
     suspend fun deleteFilesByIds(fileIds: List<String>)
 }
