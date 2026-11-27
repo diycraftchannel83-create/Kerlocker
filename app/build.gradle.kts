@@ -48,7 +48,10 @@ android {
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
       // AI Studio.
-      signingConfig = signingConfigs.getByName("release")
+      // CI can build unsigned artifacts if release signing secrets are not configured.
+      val releaseSigningReady = listOf("KEYSTORE_PATH", "STORE_PASSWORD", "KEY_PASSWORD")
+        .all { !System.getenv(it).isNullOrBlank() }
+      signingConfig = if (releaseSigningReady) signingConfigs.getByName("release") else null
     }
     debug {
       // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
