@@ -25,6 +25,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -601,8 +603,10 @@ class VaultStorageManager(
         val manifestFilesById = decodedManifest?.files?.associateBy { it.id }.orEmpty()
 
         val entries = coroutineScope {
+            val scanSemaphore = Semaphore(4)
             vaultDocs.map { doc ->
                 async(Dispatchers.IO) {
+                    scanSemaphore.withPermit {
                     val fileName = doc.name!!
                     val idCandidate = fileName.removeSuffix(".vault")
                     val thumbName = "$idCandidate.thumb.vault".takeIf { docsByName.containsKey(it) }
@@ -645,10 +649,10 @@ class VaultStorageManager(
                             canDecrypt = canOpen
                         )
                     }
+                    }
                 }
             }.awaitAll()
         }
-
 
         val manifestLocked = manifestDoc != null && decodedManifest == null
         val anyLockedFiles = entries.any { !it.canDecrypt }
