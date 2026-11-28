@@ -406,6 +406,41 @@ fun ExternalVaultScreen(
                     if (!extState.isScanning) {
                         val recoverableReady = extState.entries.count { it.canDecrypt && !it.alreadyInLocalVault }
                         val lockedCount = extState.entries.count { !it.canDecrypt }
+                        val readableHeaderCount = extState.entries.count { it.canDecrypt }
+                        val alreadySyncedCount = extState.entries.count { it.alreadyInLocalVault }
+                        val totalMainVaultFiles = extState.entries.size
+                        item {
+                            Card(
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.35f)),
+                                shape = RoundedCornerShape(18.dp)
+                            ) {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text("Legacy Locker Recovery", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                                    Text(
+                                        "Mode audit & pemulihan file dari Locker lama yang foldernya masih tersisa setelah aplikasi di-uninstall. File sumber .vault tidak akan dihapus.",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                                        RecoveryCountTile("Total .vault", totalMainVaultFiles.toString(), Modifier.weight(1f))
+                                        RecoveryCountTile("Header/kunci cocok", readableHeaderCount.toString(), Modifier.weight(1f))
+                                        RecoveryCountTile("Butuh kunci", lockedCount.toString(), Modifier.weight(1f))
+                                    }
+                                    Text(
+                                        "$alreadySyncedCount file sudah tercatat di brankas lokal. $recoverableReady file siap dipulihkan.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        "Catatan: pemeriksaan header/kunci belum membuktikan seluruh isi ciphertext bebas korupsi. Integritas penuh diverifikasi saat file dibuka atau proses recovery.",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
                         item {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -585,6 +620,21 @@ fun ExternalVaultScreen(
         )
     }
 }
+
+@Composable
+private fun RecoveryCountTile(label: String, count: String, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f)
+    ) {
+        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(count, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
 
 @Composable
 private fun ExternalVaultEntryCard(
