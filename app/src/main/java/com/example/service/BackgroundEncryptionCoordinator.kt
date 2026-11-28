@@ -75,7 +75,7 @@ class BackgroundEncryptionCoordinator(
         org.json.JSONArray(galleryScanPrefs.getString("items", "[]")).length()
     }.getOrDefault(0)
 
-    fun scanGalleryAndCache() {
+    fun scanGalleryAndCache(onComplete: (Int) -> Unit = {}) {
         scope.launch {
             val selectedMediaPermission = android.os.Build.VERSION.SDK_INT >= 34 && appContext.checkSelfPermission(android.Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == android.content.pm.PackageManager.PERMISSION_GRANTED
             val legacyMediaPermission = android.os.Build.VERSION.SDK_INT < 33 && appContext.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) == android.content.pm.PackageManager.PERMISSION_GRANTED
@@ -97,6 +97,7 @@ class BackgroundEncryptionCoordinator(
                     while (c.moveToNext()) { val uri = android.content.ContentUris.withAppendedId(android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI, c.getLong(id)); cache.put(org.json.JSONObject().put("uri", uri.toString()).put("name", c.getString(name) ?: "").put("size", c.getLong(size)).put("date", c.getLong(date)).put("type", "video")) }
                 }
                 galleryScanPrefs.edit().putString("items", cache.toString()).putLong("scan_time", System.currentTimeMillis()).apply()
+                onComplete(cache.length())
                 _events.tryEmit(VaultEvent.ShowMessage("Scan selesai: " + cache.length() + " media tersimpan sebagai indeks recovery. Bisa dipakai ulang tanpa scan ulang."))
             }.onFailure { e -> _events.tryEmit(VaultEvent.ShowMessage("Scan galeri gagal: " + (e.localizedMessage ?: "akses galeri bermasalah"))) }
         }
