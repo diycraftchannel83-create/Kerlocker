@@ -66,6 +66,7 @@ class BackgroundEncryptionCoordinator(
         }
     }
 
+// Recovery scan index persists in app-private SharedPreferences; filenames are shown for user review.
     // Persistent scan index: results are kept app-private and reused for recovery.
     private val galleryScanPrefs by lazy {
         appContext.getSharedPreferences("gallery_scan_cache", Context.MODE_PRIVATE)
