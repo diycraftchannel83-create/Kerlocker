@@ -568,7 +568,8 @@ class VaultRepository(
             ?: dao.getRecoveryTargetAlbum()?.id
             ?: throw IllegalStateException("Album tujuan pemulihan tidak tersedia")
 
-        val localEntryForRepair = existingLocalForRepair(folderUri, entry, backupName)?.let { buildRecoveryEntryFromLocal(it, backupName) }
+        val existingLocalForRepair = existingLocalForRepair(folderUri, entry, backupName)
+        val localEntryForRepair = existingLocalForRepair?.let { buildRecoveryEntryFromLocal(it, backupName) }
         val recovered = storageManager.recoverExternalEncryptedFile(
             folderUri = folderUri,
             backupName = backupName,
