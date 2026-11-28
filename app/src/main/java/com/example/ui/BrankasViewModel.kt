@@ -101,6 +101,7 @@ data class VaultUiState(
     val isRecoveringApp: Boolean = false,
     val lockoutTick: Long = 0L,
     val pendingSourceDeletePrompt: PendingSourceDeletePrompt? = null,
+    val cachedGalleryScanCount: Int = 0,
     val duplicateScanState: DuplicateScanUiState = DuplicateScanUiState()
 )
 
@@ -119,7 +120,8 @@ class BrankasViewModel(
         VaultUiState(
             biometricAvailability = BiometricAuthHelper.checkAvailability(application),
             isHardwareBackedKeystore = repository.isHardwareKeystoreBacked(),
-            vaultInternalPath = repository.getVaultDirectoryDisplay()
+            vaultInternalPath = repository.getVaultDirectoryDisplay(),
+            cachedGalleryScanCount = encryptionCoordinator.cachedGalleryScanCount()
         )
     )
 
@@ -441,14 +443,15 @@ class BrankasViewModel(
     }
 
     fun scanGalleryAndCache() {
-        encryptionCoordinator.scanGalleryAndCache()
+        encryptionCoordinator.scanGalleryAndCache { count ->
+            _localState.update { it.copy(cachedGalleryScanCount = count) }
+        }
     }
 
     fun reuseCachedGalleryScan() {
         encryptionCoordinator.reuseCachedGalleryScan()
+        _localState.update { it.copy(cachedGalleryScanCount = encryptionCoordinator.cachedGalleryScanCount()) }
     }
-
-    fun cachedGalleryScanCount(): Int = encryptionCoordinator.cachedGalleryScanCount()
 
     fun dismissPendingSourceDeletePrompt() {
         encryptionCoordinator.dismissPendingSourceDeletePrompt()
