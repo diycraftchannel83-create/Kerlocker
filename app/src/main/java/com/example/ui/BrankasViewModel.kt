@@ -932,56 +932,54 @@ class BrankasViewModel(
         }
         vaultBackgroundScanRunning = true
         viewModelScope.launch(Dispatchers.IO) {
-            var restored = 0
-            var skipped = 0
-            var filesFound = 0
             try {
                 _localState.update { state ->
                     state.copy(
-                        vaultBackgroundScan = ImportProgressState(0, 0, "Mengakses folder Vault…"),
+                        vaultBackgroundScan = ImportProgressState(0, 0, "Membaca metadata Vault…"),
                         vaultBackgroundScanSummary = null
                     )
                 }
-                val listed = runCatching {
-                    repository.listExternalEncryptedFiles(Uri.parse(folderUri))
-                }.onFailure { error ->
-                    _events.tryEmit(VaultEvent.ShowMessage("Tidak dapat membaca folder Vault: ${error.localizedMessage ?: "akses folder gagal"}"))
-                }.getOrNull() ?: emptyList()
-                val files = listed.filter { doc ->
-                    val name = doc.name.orEmpty()
-                    name.endsWith(".vault", ignoreCase = true) &&
-                        !name.endsWith(".thumb.vault", ignoreCase = true)
-                }.sortedBy { it.name.orEmpty() }
-                filesFound = files.size
-                if (files.isEmpty()) {
-                    val msg = "Scan selesai: tidak ditemukan file .vault pada folder yang dipilih."
-                    _localState.update { it.copy(vaultBackgroundScan = null, vaultBackgroundScanSummary = msg) }
-                    _events.tryEmit(VaultEvent.ShowMessage(msg))
+                val inspection = repository.inspectExternalVaultFolder(Uri.parse(folderUri))
+                val total = inspection.entries.size
+                val decryptable = inspection.entries.count { it.canDecrypt }
+                val locked = total - decryptable
+                _localState.update { state ->
+                    state.copy(
+                        vaultBackgroundScan = ImportProgressState(0, total, "Memulihkan album & indeks file…")
+                    )
+                }
+                if (total == 0) {
+                    val summary = "Scan selesai: folder Vault tidak memiliki file .vault."
+                    _localState.update { it.copy(vaultBackgroundScan = null, vaultBackgroundScanSummary = summary) }
+                    _events.tryEmit(VaultEvent.ShowMessage(summary))
                     return@launch
                 }
-                files.forEachIndexed { index, doc ->
-                    val name = doc.name ?: run { skipped++; return@forEachIndexed }
+                if (inspection.manifestAlbums.isEmpty()) {
                     _localState.update { state ->
-                        state.copy(vaultBackgroundScan = ImportProgressState(index, files.size, "Memulihkan: $name"))
-                    }
-                    val result = runCatching<VaultFileEntity> {
-                        repository.restoreExternalEncryptedFile(
-                            folderUri = Uri.parse(folderUri),
-                            backupName = name,
-                            entry = null,
-                            overrideKey = repository.getActiveVaultKey()
-                        )
-                    }
-                    if (result.isSuccess) restored++ else skipped++
-                    _localState.update { state ->
-                        state.copy(vaultBackgroundScan = ImportProgressState(index + 1, files.size, "Diproses: $name"))
+                        state.copy(vaultBackgroundScan = ImportProgressState(0, total, "Metadata album tidak tersedia; file akan dipulihkan ke album recovery."))
                     }
                 }
-                val summary = "Scan selesai: $restored berhasil tersedia, $skipped gagal/tidak kompatibel ($filesFound file ditemukan)."
-                _localState.update { it.copy(vaultBackgroundScan = null, vaultBackgroundScanSummary = summary) }
+                val outcome = repository.restoreAllFromInspection(
+                    folderUri = Uri.parse(folderUri),
+                    inspection = inspection,
+                    overrideKey = repository.getActiveVaultKey()
+                )
+                val summary = buildString {
+                    append("Recovery scan: ${outcome.restoredCount} file berhasil dimasukkan kembali")
+                    if (outcome.skippedExistingCount > 0) append(", ${outcome.skippedExistingCount} sudah tersedia")
+                    if (outcome.failedCount > 0) append(", ${outcome.failedCount} gagal")
+                    if (outcome.lockedSkippedCount > 0) append(", ${outcome.lockedSkippedCount} terkunci (butuh kunci lama)")
+                    append(". Total ${total} file ditemukan; ${decryptable} dapat didekripsi.")
+                    if (inspection.manifestAlbums.isNotEmpty()) append(" ${inspection.manifestAlbums.size} metadata album dibaca dari manifest.")
+                    else append(" Metadata album tidak ditemukan; file tanpa metadata masuk album recovery.")
+                }
+                _localState.update { it.copy(
+                    vaultBackgroundScan = null,
+                    vaultBackgroundScanSummary = summary
+                ) }
                 _events.tryEmit(VaultEvent.ShowMessage(summary))
             } catch (error: Throwable) {
-                val message = "Scan Vault gagal: ${error.localizedMessage ?: "kesalahan tidak diketahui"}"
+                val message = "Recovery scan gagal: ${error.localizedMessage ?: "kesalahan tidak diketahui"}"
                 _localState.update { it.copy(vaultBackgroundScan = null, vaultBackgroundScanSummary = message) }
                 _events.tryEmit(VaultEvent.ShowMessage(message))
             } finally {
