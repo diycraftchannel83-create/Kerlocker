@@ -427,27 +427,6 @@ fun VaultHomeScreen(
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                if (cachedGalleryScanCount > 0) {
-                    item(key = "gallery_scan_cache_banner") {
-                        Card(
-                            modifier = Modifier.fillMaxWidth().clickable { showGalleryScanResults = true },
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(14.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text("Indeks Scan Galeri Tersimpan", fontWeight = FontWeight.SemiBold)
-                                    Text("$cachedGalleryScanCount media • gunakan untuk recovery tanpa scan ulang", style = MaterialTheme.typography.bodySmall)
-                                }
-                                TextButton(onClick = { showGalleryScanResults = true }) { Text("Lihat") }
-                                TextButton(onClick = onReuseCachedGalleryScan) { Text("Recovery") }
-                            }
-                        }
-                    }
-                }
                 // Import progress banner
                 uiState.importProgress?.let { progress ->
                     item {
@@ -489,7 +468,7 @@ fun VaultHomeScreen(
                         shape = RoundedCornerShape(18.dp)
                     ) {
                         Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text("Background Vault Scanner", fontWeight = FontWeight.Bold)
+                            Text("Background Scan BrankasKu", fontWeight = FontWeight.Bold)
                             uiState.vaultBackgroundScan?.let { scan ->
                                 Text(scan.currentFileName, style = MaterialTheme.typography.bodySmall)
                                 LinearProgressIndicator(
@@ -497,11 +476,11 @@ fun VaultHomeScreen(
                                     modifier = Modifier.fillMaxWidth()
                                 )
                             } ?: Text(
-                                uiState.vaultBackgroundScanSummary ?: "Scan otomatis file .vault pada folder BrankasKu setelah brankas dibuka.",
+                                uiState.vaultBackgroundScanSummary ?: "Scan hanya file terenkripsi .vault di folder BrankasKu untuk recovery album dan indeks file. Tidak memindai galeri atau foto di luar Vault.",
                                 style = MaterialTheme.typography.bodySmall
                             )
                             OutlinedButton(onClick = onScanVaultBackground, enabled = uiState.vaultBackgroundScan == null) {
-                                Text("Scan Vault Sekarang")
+                                Text("Scan File BrankasKu")
                             }
                         }
                     }
