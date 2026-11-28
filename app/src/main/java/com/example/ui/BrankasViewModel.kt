@@ -917,26 +917,52 @@ class BrankasViewModel(
     }
 
     fun startBackgroundVaultScan() {
-        val folderUri = uiState.value.securityPrefs.externalVaultFolderUri ?: return
-        if (vaultBackgroundScanRunning || uiState.value.isLocked) return
+        val folderUri = uiState.value.securityPrefs.externalVaultFolderUri
+        if (folderUri.isNullOrBlank()) {
+            _events.tryEmit(VaultEvent.ShowMessage("Folder BrankasKu belum dipilih. Pilih folder tujuan terlebih dahulu di Pengaturan."))
+            return
+        }
+        if (uiState.value.isLocked) {
+            _events.tryEmit(VaultEvent.ShowMessage("Buka Brankas dengan PIN terlebih dahulu sebelum scan."))
+            return
+        }
+        if (vaultBackgroundScanRunning) {
+            _events.tryEmit(VaultEvent.ShowMessage("Pemindaian Vault sedang berjalan. Tunggu hingga selesai."))
+            return
+        }
         vaultBackgroundScanRunning = true
         viewModelScope.launch(Dispatchers.IO) {
             var restored = 0
             var skipped = 0
+            var filesFound = 0
             try {
-                val files = runCatching {
+                _localState.update { state ->
+                    state.copy(
+                        vaultBackgroundScan = ImportProgressState(0, 0, "Mengakses folder Vault…"),
+                        vaultBackgroundScanSummary = null
+                    )
+                }
+                val listed = runCatching {
                     repository.listExternalEncryptedFiles(Uri.parse(folderUri))
-                        .filter { doc ->
-                            val name = doc.name.orEmpty()
-                            name.endsWith(".vault", ignoreCase = true) &&
-                                !name.endsWith(".thumb.vault", ignoreCase = true)
-                        }
-                        .sortedBy { it.name.orEmpty() }
-                }.getOrElse { emptyList() }
+                }.onFailure { error ->
+                    _events.tryEmit(VaultEvent.ShowMessage("Tidak dapat membaca folder Vault: ${error.localizedMessage ?: "akses folder gagal"}"))
+                }.getOrNull() ?: emptyList()
+                val files = listed.filter { doc ->
+                    val name = doc.name.orEmpty()
+                    name.endsWith(".vault", ignoreCase = true) &&
+                        !name.endsWith(".thumb.vault", ignoreCase = true)
+                }.sortedBy { it.name.orEmpty() }
+                filesFound = files.size
+                if (files.isEmpty()) {
+                    val msg = "Scan selesai: tidak ditemukan file .vault pada folder yang dipilih."
+                    _localState.update { it.copy(vaultBackgroundScan = null, vaultBackgroundScanSummary = msg) }
+                    _events.tryEmit(VaultEvent.ShowMessage(msg))
+                    return@launch
+                }
                 files.forEachIndexed { index, doc ->
-                    val name = doc.name ?: return@forEachIndexed
+                    val name = doc.name ?: run { skipped++; return@forEachIndexed }
                     _localState.update { state ->
-                        state.copy(vaultBackgroundScan = ImportProgressState(index, files.size, "Memindai: $name"))
+                        state.copy(vaultBackgroundScan = ImportProgressState(index, files.size, "Memulihkan: $name"))
                     }
                     val result = runCatching<VaultFileEntity> {
                         repository.restoreExternalEncryptedFile(
@@ -947,14 +973,17 @@ class BrankasViewModel(
                         )
                     }
                     if (result.isSuccess) restored++ else skipped++
+                    _localState.update { state ->
+                        state.copy(vaultBackgroundScan = ImportProgressState(index + 1, files.size, "Diproses: $name"))
+                    }
                 }
-                _localState.update { it.copy(
-                    vaultBackgroundScan = null,
-                    vaultBackgroundScanSummary = "Scan selesai: $restored berhasil tersedia, $skipped gagal/tidak kompatibel (${files.size} file ditemukan)."
-                ) }
-                if (files.isNotEmpty()) {
-                    _events.tryEmit(VaultEvent.ShowMessage("Background scan: $restored file berhasil, $skipped gagal/tidak kompatibel"))
-                }
+                val summary = "Scan selesai: $restored berhasil tersedia, $skipped gagal/tidak kompatibel ($filesFound file ditemukan)."
+                _localState.update { it.copy(vaultBackgroundScan = null, vaultBackgroundScanSummary = summary) }
+                _events.tryEmit(VaultEvent.ShowMessage(summary))
+            } catch (error: Throwable) {
+                val message = "Scan Vault gagal: ${error.localizedMessage ?: "kesalahan tidak diketahui"}"
+                _localState.update { it.copy(vaultBackgroundScan = null, vaultBackgroundScanSummary = message) }
+                _events.tryEmit(VaultEvent.ShowMessage(message))
             } finally {
                 vaultBackgroundScanRunning = false
                 _localState.update { it.copy(vaultBackgroundScan = null) }
