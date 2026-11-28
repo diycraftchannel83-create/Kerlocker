@@ -69,6 +69,17 @@ class VaultRepository(
 
     fun observeAlbum(albumId: String): Flow<AlbumEntity?> = dao.observeAlbum(albumId)
 
+    suspend fun getRecoveryTargetAlbumId(): String {
+        ensureDefaultAlbums()
+        return dao.getRecoveryTargetAlbum()?.id
+            ?: dao.getAllAlbumsSync().firstOrNull()?.id
+            ?: throw IllegalStateException("Album brankas tidak tersedia")
+    }
+
+    suspend fun getVaultOriginalNames(): List<String> =
+        dao.getAllFilesForMirror().map { it.originalName }
+
+
     fun observeFilesInAlbum(albumId: String): Flow<List<VaultFileEntity>> =
         dao.observeFilesInAlbum(albumId)
 
