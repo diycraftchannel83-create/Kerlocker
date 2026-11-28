@@ -25,6 +25,7 @@ import com.example.data.VaultRepository
 import com.example.service.BackgroundEncryptionCoordinator
 import com.example.ui.components.ImageAdjustmentParams
 import com.example.ui.theme.VaultThemePreference
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -919,7 +920,7 @@ class BrankasViewModel(
         val folderUri = uiState.value.securityPrefs.externalVaultFolderUri ?: return
         if (vaultBackgroundScanRunning || uiState.value.isLocked) return
         vaultBackgroundScanRunning = true
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             var restored = 0
             var skipped = 0
             try {
