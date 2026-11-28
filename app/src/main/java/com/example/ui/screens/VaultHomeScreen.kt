@@ -144,6 +144,7 @@ fun VaultHomeScreen(
     onLockNow: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenExternalVault: () -> Unit,
+    onScanVaultBackground: () -> Unit = {},
     onOpenDuplicateTracker: () -> Unit = {},
     onScanGallery: () -> Unit = {},
     onReuseCachedGalleryScan: () -> Unit = {},
@@ -476,6 +477,31 @@ fun VaultHomeScreen(
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
                                 )
+                            }
+                        }
+                    }
+                }
+
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+                        shape = RoundedCornerShape(18.dp)
+                    ) {
+                        Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("Background Vault Scanner", fontWeight = FontWeight.Bold)
+                            uiState.vaultBackgroundScan?.let { scan ->
+                                Text(scan.currentFileName, style = MaterialTheme.typography.bodySmall)
+                                LinearProgressIndicator(
+                                    progress = { if (scan.total > 0) scan.processed.toFloat() / scan.total else 0f },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            } ?: Text(
+                                uiState.vaultBackgroundScanSummary ?: "Scan otomatis file .vault pada folder BrankasKu setelah brankas dibuka.",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            OutlinedButton(onClick = onScanVaultBackground, enabled = uiState.vaultBackgroundScan == null) {
+                                Text("Scan Vault Sekarang")
                             }
                         }
                     }
