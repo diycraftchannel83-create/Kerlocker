@@ -435,7 +435,7 @@ fun VaultHomeScreen(
                             Row(
                                 modifier = Modifier.fillMaxWidth().padding(14.dp),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBetween
+                                horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text("Indeks Scan Galeri Tersimpan", fontWeight = FontWeight.SemiBold)
