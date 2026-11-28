@@ -431,75 +431,85 @@ class VaultRepository(
         overrideKey: SecretKey? = null
     ): FullRecoveryOutcome {
         ensureDefaultAlbums()
-        // Recreate manifest albums first so original folder structure returns cleanly
         if (inspection.manifestAlbums.isNotEmpty()) {
             val existingAlbumIds = dao.getAllAlbumsSync().map { it.id }.toSet()
-            val newAlbums = inspection.manifestAlbums
-                .filter { it.id !in existingAlbumIds }
-                .map {
-                    AlbumEntity(
-                        id = it.id,
-                        name = it.name,
-                        iconKey = it.iconKey,
-                        colorHex = it.colorHex,
-                        isPinned = it.isPinned,
-                        createdAt = it.createdAt,
-                        sortOrder = it.sortOrder
-                    )
-                }
-            if (newAlbums.isNotEmpty()) {
-                dao.insertAlbums(newAlbums)
+            val newAlbums = inspection.manifestAlbums.filter { it.id !in existingAlbumIds }.map {
+                AlbumEntity(
+                    id = it.id,
+                    name = it.name,
+                    iconKey = it.iconKey,
+                    colorHex = it.colorHex,
+                    isPinned = it.isPinned,
+                    createdAt = it.createdAt,
+                    sortOrder = it.sortOrder
+                )
             }
+            if (newAlbums.isNotEmpty()) dao.insertAlbums(newAlbums)
         }
         val fallbackAlbum = dao.getRecoveryTargetAlbum()
             ?: throw IllegalStateException("Album tujuan pemulihan tidak tersedia")
 
-        var restored = 0
-        var skipped = 0
-        var failed = 0
-        var lockedSkipped = 0
+        val restored = AtomicInteger(0)
+        val skipped = AtomicInteger(0)
+        val failed = AtomicInteger(0)
+        val lockedSkipped = AtomicInteger(0)
+        val semaphore = Semaphore(3)
+        val dbMutex = Mutex()
 
-        for (entry in inspection.entries) {
-            val existingById = dao.getFileById(entry.fileId)
-            if (existingById != null) {
-                skipped++
-                continue
-            }
-            if (!entry.canDecrypt) {
-                lockedSkipped++
-                continue
-            }
-            val targetAlbumId = entry.albumId?.takeIf { dao.getAlbumById(it) != null } ?: fallbackAlbum.id
-            val result = runCatching {
-                val entity = storageManager.recoverExternalEncryptedFile(
-                    folderUri = folderUri,
-                    backupName = entry.backupFileName,
-                    albumId = targetAlbumId,
-                    manifestEntry = entry,
-                    overrideKey = overrideKey,
-                    reencryptForCurrentVault = true
-                )
-                val existingByName = if (!entry.hasManifestMetadata) dao.findFileByOriginalName(entity.originalName) else null
-                if (existingByName != null) {
-                    storageManager.deleteEncryptedAssets(entity)
-                    skipped++
-                } else {
-                    dao.insertFile(entity)
-                    restored++
+        coroutineScope {
+            inspection.entries.map { entry ->
+                async(Dispatchers.IO) {
+                    semaphore.withPermit {
+                        val local = dao.getFileById(entry.fileId)
+                        if (local != null && storageManager.hasLocalEncryptedBlob(local)) {
+                            skipped.incrementAndGet()
+                            return@withPermit
+                        }
+                        if (!entry.canDecrypt) {
+                            lockedSkipped.incrementAndGet()
+                            return@withPermit
+                        }
+                        val targetAlbumId = local?.albumId?.takeIf { dao.getAlbumById(it) != null }
+                            ?: entry.albumId?.takeIf { dao.getAlbumById(it) != null }
+                            ?: fallbackAlbum.id
+                        val metadataForRepair = local?.let { buildRecoveryEntryFromLocal(it, entry.backupFileName) }
+                            ?: entry
+                        val outcome = runCatching {
+                            val recovered = storageManager.recoverExternalEncryptedFile(
+                                folderUri = folderUri,
+                                backupName = entry.backupFileName,
+                                albumId = targetAlbumId,
+                                manifestEntry = metadataForRepair,
+                                overrideKey = overrideKey,
+                                reencryptForCurrentVault = true
+                            )
+                            dbMutex.withLock {
+                                if (local != null) {
+                                    dao.updateFile(recovered)
+                                    restored.incrementAndGet()
+                                } else {
+                                    val existingByName = if (!entry.hasManifestMetadata) dao.findFileByOriginalName(recovered.originalName) else null
+                                    if (existingByName != null) {
+                                        storageManager.deleteEncryptedAssets(recovered)
+                                        skipped.incrementAndGet()
+                                    } else {
+                                        dao.insertFile(recovered)
+                                        restored.incrementAndGet()
+                                    }
+                                }
+                            }
+                        }
+                        if (outcome.isFailure) failed.incrementAndGet()
+                    }
                 }
-            }
-            if (result.isFailure) {
-                failed++
-            }
+            }.awaitAll()
         }
-        if (restored > 0) {
-            syncManifestToExternalFolderIfConnected()
-        }
+        if (restored.get() > 0) syncManifestToExternalFolderIfConnected()
         return FullRecoveryOutcome(
-            restoredCount = restored,
-            skippedExistingCount = skipped,
-            failedCount = failed,
-            lockedSkippedCount = lockedSkipped
+            restoredCount = restored.get(),
+            skippedExistingCount = skipped.get(),
+            failedCount = failed.get(),
+            lockedSkippedCount = lockedSkipped.get()
         )
     }
 
