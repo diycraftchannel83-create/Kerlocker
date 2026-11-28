@@ -74,6 +74,9 @@ interface VaultDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertFile(file: VaultFileEntity)
 
+    @Update
+    suspend fun updateFile(file: VaultFileEntity)
+
     @Query("SELECT * FROM vault_files WHERE originalName = :originalName LIMIT 1")
     suspend fun findFileByOriginalName(originalName: String): VaultFileEntity?
 
