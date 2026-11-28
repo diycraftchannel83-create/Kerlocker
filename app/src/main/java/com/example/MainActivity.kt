@@ -443,7 +443,7 @@ private fun VaultNavGraph(viewModel: BrankasViewModel) {
                 onOpenDuplicateTracker = { navController.navigate(RouteDuplicateTracker) },
                 onScanGallery = viewModel::scanGalleryAndCache,
                 onReuseCachedGalleryScan = viewModel::reuseCachedGalleryScan,
-                cachedGalleryScanCount = viewModel.cachedGalleryScanCount(),
+                cachedGalleryScanCount = uiState.cachedGalleryScanCount,
                 onSortOrderChange = viewModel::setGallerySortOrder,
                 loadThumbnail = viewModel::loadThumbnail
             )
