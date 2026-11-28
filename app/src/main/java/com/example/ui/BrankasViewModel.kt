@@ -440,6 +440,16 @@ class BrankasViewModel(
         )
     }
 
+    fun scanGalleryAndCache() {
+        encryptionCoordinator.scanGalleryAndCache()
+    }
+
+    fun reuseCachedGalleryScan() {
+        encryptionCoordinator.reuseCachedGalleryScan()
+    }
+
+    fun cachedGalleryScanCount(): Int = encryptionCoordinator.cachedGalleryScanCount()
+
     fun dismissPendingSourceDeletePrompt() {
         encryptionCoordinator.dismissPendingSourceDeletePrompt()
     }
