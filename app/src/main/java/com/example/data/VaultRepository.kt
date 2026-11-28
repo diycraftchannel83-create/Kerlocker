@@ -355,7 +355,7 @@ class VaultRepository(
         folderUri: Uri,
         recoveryPin: String? = null
     ): ExternalVaultInspectionResult {
-        val existingIds = dao.getAllFilesForMirror().map { it.id }.toSet()
+        val existingIds = dao.getAllFilesForMirror().filter { storageManager.hasLocalEncryptedBlob(it) }.map { it.id }.toSet()
         val result = storageManager.inspectExternalVaultFolder(folderUri, existingIds, recoveryPin)
         if (result.unlockedMasterKeys.isNotEmpty() && vaultKeyManager.getActiveVaultKey() != null) {
             persistExtraRecoveredKeys(result.unlockedMasterKeys)
