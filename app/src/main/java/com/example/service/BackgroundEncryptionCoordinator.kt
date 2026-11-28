@@ -77,8 +77,10 @@ class BackgroundEncryptionCoordinator(
 
     fun scanGalleryAndCache() {
         scope.launch {
-            val imagesPermission = if (android.os.Build.VERSION.SDK_INT >= 33) appContext.checkSelfPermission(android.Manifest.permission.READ_MEDIA_IMAGES) == android.content.pm.PackageManager.PERMISSION_GRANTED else appContext.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) == android.content.pm.PackageManager.PERMISSION_GRANTED
-            val videosPermission = if (android.os.Build.VERSION.SDK_INT >= 33) appContext.checkSelfPermission(android.Manifest.permission.READ_MEDIA_VIDEO) == android.content.pm.PackageManager.PERMISSION_GRANTED else appContext.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            val selectedMediaPermission = android.os.Build.VERSION.SDK_INT >= 34 && appContext.checkSelfPermission(android.Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            val legacyMediaPermission = android.os.Build.VERSION.SDK_INT < 33 && appContext.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            val imagesPermission = legacyMediaPermission || appContext.checkSelfPermission(android.Manifest.permission.READ_MEDIA_IMAGES) == android.content.pm.PackageManager.PERMISSION_GRANTED || selectedMediaPermission
+            val videosPermission = legacyMediaPermission || appContext.checkSelfPermission(android.Manifest.permission.READ_MEDIA_VIDEO) == android.content.pm.PackageManager.PERMISSION_GRANTED || selectedMediaPermission
             if (!imagesPermission && !videosPermission) {
                 _events.tryEmit(VaultEvent.ShowMessage("Izin foto/video diperlukan untuk scan galeri."))
                 return@launch
