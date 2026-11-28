@@ -937,8 +937,13 @@ class BrankasViewModel(
                     _localState.update { state ->
                         state.copy(vaultBackgroundScan = ImportProgressState(index, files.size, "Memindai: $name"))
                     }
-                    val result = runCatching {
-                        repository.restoreExternalVaultFile(Uri.parse(folderUri), name)
+                    val result = runCatching<VaultFileEntity> {
+                        repository.restoreExternalEncryptedFile(
+                            folderUri = Uri.parse(folderUri),
+                            backupName = name,
+                            entry = null,
+                            overrideKey = repository.getActiveVaultKey()
+                        )
                     }
                     if (result.isSuccess) restored++ else skipped++
                 }
