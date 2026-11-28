@@ -444,6 +444,7 @@ private fun VaultNavGraph(viewModel: BrankasViewModel) {
                 onScanGallery = viewModel::scanGalleryAndCache,
                 onReuseCachedGalleryScan = viewModel::reuseCachedGalleryScan,
                 cachedGalleryScanCount = uiState.cachedGalleryScanCount,
+                cachedGalleryScanNames = uiState.cachedGalleryScanNames,
                 onSortOrderChange = viewModel::setGallerySortOrder,
                 loadThumbnail = viewModel::loadThumbnail
             )
