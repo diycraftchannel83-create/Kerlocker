@@ -942,7 +942,6 @@ class BrankasViewModel(
                 val inspection = repository.inspectExternalVaultFolder(Uri.parse(folderUri))
                 val total = inspection.entries.size
                 val decryptable = inspection.entries.count { it.canDecrypt }
-                val locked = total - decryptable
                 _localState.update { state ->
                     state.copy(
                         vaultBackgroundScan = ImportProgressState(0, total, "Memulihkan album & indeks file…")
@@ -968,10 +967,10 @@ class BrankasViewModel(
                     append("Recovery scan: ${outcome.restoredCount} file berhasil dimasukkan kembali")
                     if (outcome.skippedExistingCount > 0) append(", ${outcome.skippedExistingCount} sudah tersedia")
                     if (outcome.failedCount > 0) append(", ${outcome.failedCount} gagal")
-                    if (outcome.lockedSkippedCount > 0) append(", ${outcome.lockedSkippedCount} terkunci (butuh kunci lama)")
-                    append(". Total ${total} file ditemukan; ${decryptable} dapat didekripsi.")
+                    if (outcome.lockedSkippedCount > 0) append(", ${outcome.lockedSkippedCount} terkunci (perlu PIN lama/file kunci recovery)")
+                    append(". Total ${total} file utama ditemukan; ${decryptable} dapat didekripsi dengan kunci yang tersedia.")
                     if (inspection.manifestAlbums.isNotEmpty()) append(" ${inspection.manifestAlbums.size} metadata album dibaca dari manifest.")
-                    else append(" Metadata album tidak ditemukan; file tanpa metadata masuk album recovery.")
+                    else append(" Metadata album tidak ditemukan; file tanpa metadata masuk album recovery. File terkunci perlu dipulihkan melalui menu Pemulihan Folder dengan PIN lama atau file vault_recovery.key.")
                 }
                 _localState.update { it.copy(
                     vaultBackgroundScan = null,
