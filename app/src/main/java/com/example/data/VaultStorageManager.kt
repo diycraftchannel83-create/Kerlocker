@@ -1355,6 +1355,12 @@ class VaultStorageManager(
         }.getOrNull()
     }
 
+    /** Returns false when a database entry exists but its encrypted payload is missing/empty. */
+    fun hasLocalEncryptedBlob(fileEntity: VaultFileEntity): Boolean {
+        val blob = File(blobsDir, fileEntity.encryptedFileName)
+        return blob.isFile && blob.length() > VaultCryptoEngine.FIXED_HEADER_SIZE
+    }
+
     suspend fun decryptToBytes(fileEntity: VaultFileEntity): ByteArray = withContext(Dispatchers.IO) {
         val blobFile = File(blobsDir, fileEntity.encryptedFileName)
         if (!blobFile.exists()) {
