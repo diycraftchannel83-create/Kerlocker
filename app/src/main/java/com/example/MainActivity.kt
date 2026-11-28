@@ -440,6 +440,7 @@ private fun VaultNavGraph(viewModel: BrankasViewModel) {
                 onLockNow = viewModel::lockVault,
                 onOpenSettings = { navController.navigate(RouteSettings) },
                 onOpenExternalVault = { navController.navigate(RouteExternalVault) },
+                onScanVaultBackground = viewModel::startBackgroundVaultScan,
                 onOpenDuplicateTracker = { navController.navigate(RouteDuplicateTracker) },
                 onScanGallery = viewModel::scanGalleryAndCache,
                 onReuseCachedGalleryScan = viewModel::reuseCachedGalleryScan,
