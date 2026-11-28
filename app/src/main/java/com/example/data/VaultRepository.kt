@@ -920,8 +920,49 @@ class VaultRepository(
     suspend fun loadThumbnail(fileEntity: VaultFileEntity): Bitmap? =
         storageManager.loadDecryptedThumbnail(fileEntity)
 
-    suspend fun decryptBytes(fileEntity: VaultFileEntity): ByteArray =
-        storageManager.decryptToBytes(fileEntity)
+    suspend fun decryptBytes(fileEntity: VaultFileEntity): ByteArray {
+        // Self-heal orphaned Room records when the internal ciphertext was lost but an
+        // external mirrored .vault backup still exists. Never delete or overwrite the backup.
+        val normalResult = runCatching { storageManager.decryptToBytes(fileEntity) }
+        if (normalResult.isSuccess) return normalResult.getOrThrow()
+
+        val prefs = securityPrefs.preferencesFlow.first()
+        val externalUri = prefs.externalVaultFolderUri?.let(Uri::parse)
+            ?: throw normalResult.exceptionOrNull()!!
+        val backupName = "${fileEntity.id}.vault"
+        val backupExists = withContext(Dispatchers.IO) {
+            storageManager.listExternalEncryptedFiles(externalUri)
+                .any { it.name.equals(backupName, ignoreCase = true) }
+        }
+        if (!backupExists) throw normalResult.exceptionOrNull()!!
+
+        val recoveryEntry = ExternalVaultEntry(
+            backupFileName = backupName,
+            fileId = fileEntity.id,
+            displayName = fileEntity.originalName,
+            mimeType = fileEntity.mimeType,
+            category = fileEntity.category,
+            sizeBytes = fileEntity.originalSizeBytes,
+            albumId = fileEntity.albumId,
+            albumName = null,
+            createdAt = fileEntity.createdAt,
+            isFavorite = fileEntity.isFavorite,
+            thumbFileName = fileEntity.encryptedThumbName?.let { "${fileEntity.id}.thumb.vault" },
+            hasManifestMetadata = true,
+            alreadyInLocalVault = true,
+            canDecrypt = true
+        )
+        val repaired = storageManager.recoverExternalEncryptedFile(
+            folderUri = externalUri,
+            backupName = backupName,
+            albumId = fileEntity.albumId,
+            manifestEntry = recoveryEntry,
+            overrideKey = null,
+            reencryptForCurrentVault = true
+        )
+        dao.insertFile(repaired)
+        return storageManager.decryptToBytes(repaired)
+    }
 
     fun openEncryptedMediaDataSource(fileEntity: VaultFileEntity): MediaDataSource =
         storageManager.openEncryptedMediaDataSource(fileEntity)
