@@ -460,7 +460,7 @@ class VaultRepository(
             inspection.entries.map { entry ->
                 async(Dispatchers.IO) {
                     semaphore.withPermit {
-                        val local = dao.getFileById(entry.fileId)
+                        val local = findLocalRecordForRecovery(entry, entry.backupFileName)
                         if (local != null && storageManager.hasLocalEncryptedBlob(local)) {
                             skipped.incrementAndGet()
                             return@withPermit
@@ -513,13 +513,28 @@ class VaultRepository(
         )
     }
 
+    private suspend fun findLocalRecordForRecovery(
+        entry: ExternalVaultEntry?,
+        backupName: String
+    ): VaultFileEntity? {
+        val candidateId = entry?.fileId ?: backupName.removeSuffix(".vault")
+        dao.getFileById(candidateId)?.let { return it }
+        if (entry?.hasManifestMetadata == true) return null
+        val candidateStem = candidateId.removeSuffix(".vault").lowercase()
+        return dao.getAllFilesForMirror().firstOrNull { file ->
+            val normalized = file.originalName.lowercase()
+            normalized == "recovered_$candidateStem" ||
+                normalized.startsWith("recovered_$candidateStem.") ||
+                normalized.contains(candidateStem)
+        }
+    }
+
     private suspend fun existingLocalForRepair(
         folderUri: Uri,
         entry: ExternalVaultEntry?,
         backupName: String
     ): VaultFileEntity? {
-        val id = entry?.fileId ?: backupName.removeSuffix(".vault")
-        val existing = dao.getFileById(id) ?: return null
+        val existing = findLocalRecordForRecovery(entry, backupName) ?: return null
         if (storageManager.hasLocalEncryptedBlob(existing)) return null
         return existing
     }
