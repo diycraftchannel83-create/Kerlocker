@@ -441,6 +441,9 @@ private fun VaultNavGraph(viewModel: BrankasViewModel) {
                 onOpenSettings = { navController.navigate(RouteSettings) },
                 onOpenExternalVault = { navController.navigate(RouteExternalVault) },
                 onOpenDuplicateTracker = { navController.navigate(RouteDuplicateTracker) },
+                onScanGallery = viewModel::scanGalleryAndCache,
+                onReuseCachedGalleryScan = viewModel::reuseCachedGalleryScan,
+                cachedGalleryScanCount = viewModel.cachedGalleryScanCount(),
                 onSortOrderChange = viewModel::setGallerySortOrder,
                 loadThumbnail = viewModel::loadThumbnail
             )
