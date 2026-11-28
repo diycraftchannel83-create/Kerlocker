@@ -1,6 +1,8 @@
 package com.example.ui.screens
 
 import android.graphics.Bitmap
+import android.Manifest
+import android.os.Build
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -42,6 +44,8 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
+import androidx.compose.material.icons.rounded.PhotoLibrary
+import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.FileCopy
 import androidx.compose.material.icons.rounded.FolderSpecial
 import androidx.compose.material.icons.rounded.Lock
@@ -139,6 +143,9 @@ fun VaultHomeScreen(
     onOpenSettings: () -> Unit,
     onOpenExternalVault: () -> Unit,
     onOpenDuplicateTracker: () -> Unit = {},
+    onScanGallery: () -> Unit = {},
+    onReuseCachedGalleryScan: () -> Unit = {},
+    cachedGalleryScanCount: Int = 0,
     onSortOrderChange: (GallerySortOrder) -> Unit,
     loadThumbnail: suspend (VaultFileEntity) -> Bitmap?
 ) {
@@ -160,6 +167,20 @@ fun VaultHomeScreen(
     }
 
     val targetAlbumId = pendingTargetAlbumId ?: uiState.albums.firstOrNull()?.album?.id
+
+    val galleryScanPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { granted ->
+        if (granted.values.any { it }) onScanGallery()
+    }
+    val requestGalleryScanPermissions = {
+        val permissions = if (Build.VERSION.SDK_INT >= 33) {
+            arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)
+        } else {
+            arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+        galleryScanPermissionLauncher.launch(permissions)
+    }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickMultipleVisualMedia()
@@ -271,6 +292,18 @@ fun VaultHomeScreen(
                         }
                     },
                     actions = {
+                        IconButton(
+                            onClick = requestGalleryScanPermissions,
+                            modifier = Modifier.testTag("gallery_scan_button")
+                        ) {
+                            Icon(Icons.Rounded.PhotoLibrary, contentDescription = "Scan galeri")
+                        }
+                        IconButton(
+                            onClick = onReuseCachedGalleryScan,
+                            modifier = Modifier.testTag("gallery_scan_reuse_button")
+                        ) {
+                            Icon(Icons.Rounded.History, contentDescription = "Gunakan hasil scan tersimpan")
+                        }
                         IconButton(
                             onClick = onOpenDuplicateTracker,
                             modifier = Modifier.testTag("duplicate_tracker_button")
