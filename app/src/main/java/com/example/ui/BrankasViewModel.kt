@@ -103,7 +103,9 @@ data class VaultUiState(
     val pendingSourceDeletePrompt: PendingSourceDeletePrompt? = null,
     val cachedGalleryScanCount: Int = 0,
     val cachedGalleryScanNames: List<String> = emptyList(),
-    val duplicateScanState: DuplicateScanUiState = DuplicateScanUiState()
+    val duplicateScanState: DuplicateScanUiState = DuplicateScanUiState(),
+    val vaultBackgroundScan: ImportProgressState? = null,
+    val vaultBackgroundScanSummary: String? = null
 )
 
 sealed interface VaultEvent {
@@ -134,6 +136,9 @@ class BrankasViewModel(
 
     @Volatile
     private var suppressNextAutoLock = false
+
+    @Volatile
+    private var vaultBackgroundScanRunning = false
 
     val uiState: StateFlow<VaultUiState> = combine(
         _localState,
@@ -254,6 +259,7 @@ class BrankasViewModel(
                     pinError = null
                 )
             }
+            startBackgroundVaultScan()
         }
     }
 
@@ -386,6 +392,7 @@ class BrankasViewModel(
                         pinError = null
                     )
                 }
+                startBackgroundVaultScan()
             } else {
                 _localState.update {
                     it.copy(
@@ -904,6 +911,47 @@ class BrankasViewModel(
             }
             _localState.update {
                 it.copy(externalVaultState = it.externalVaultState.copy(isRestoring = false))
+            }
+        }
+    }
+
+    fun startBackgroundVaultScan() {
+        val folderUri = uiState.value.securityPrefs.externalVaultFolderUri ?: return
+        if (vaultBackgroundScanRunning || uiState.value.isLocked) return
+        vaultBackgroundScanRunning = true
+        viewModelScope.launch {
+            var restored = 0
+            var skipped = 0
+            try {
+                val files = runCatching {
+                    repository.listExternalEncryptedFiles(Uri.parse(folderUri))
+                        .filter { doc ->
+                            val name = doc.name.orEmpty()
+                            name.endsWith(".vault", ignoreCase = true) &&
+                                !name.endsWith(".thumb.vault", ignoreCase = true)
+                        }
+                        .sortedBy { it.name.orEmpty() }
+                }.getOrElse { emptyList() }
+                files.forEachIndexed { index, doc ->
+                    val name = doc.name ?: return@forEachIndexed
+                    _localState.update { state ->
+                        state.copy(vaultBackgroundScan = ImportProgressState(index, files.size, "Memindai: $name"))
+                    }
+                    val result = runCatching {
+                        repository.restoreExternalVaultFile(Uri.parse(folderUri), name)
+                    }
+                    if (result.isSuccess) restored++ else skipped++
+                }
+                _localState.update { it.copy(
+                    vaultBackgroundScan = null,
+                    vaultBackgroundScanSummary = "Scan selesai: $restored berhasil tersedia, $skipped gagal/tidak kompatibel (${files.size} file ditemukan)."
+                ) }
+                if (files.isNotEmpty()) {
+                    _events.tryEmit(VaultEvent.ShowMessage("Background scan: $restored file berhasil, $skipped gagal/tidak kompatibel"))
+                }
+            } finally {
+                vaultBackgroundScanRunning = false
+                _localState.update { it.copy(vaultBackgroundScan = null) }
             }
         }
     }
