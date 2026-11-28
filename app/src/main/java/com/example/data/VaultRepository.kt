@@ -503,6 +503,37 @@ class VaultRepository(
         )
     }
 
+    private suspend fun existingLocalForRepair(
+        folderUri: Uri,
+        entry: ExternalVaultEntry?,
+        backupName: String
+    ): VaultFileEntity? {
+        val id = entry?.fileId ?: backupName.removeSuffix(".vault")
+        val existing = dao.getFileById(id) ?: return null
+        if (storageManager.hasLocalEncryptedBlob(existing)) return null
+        return existing
+    }
+
+    private fun buildRecoveryEntryFromLocal(
+        local: VaultFileEntity,
+        backupName: String
+    ): ExternalVaultEntry = ExternalVaultEntry(
+        backupFileName = backupName,
+        fileId = local.id,
+        displayName = local.originalName,
+        mimeType = local.mimeType,
+        category = local.category,
+        sizeBytes = local.originalSizeBytes,
+        albumId = local.albumId,
+        albumName = null,
+        createdAt = local.createdAt,
+        isFavorite = local.isFavorite,
+        thumbFileName = null,
+        hasManifestMetadata = true,
+        alreadyInLocalVault = true,
+        canDecrypt = true
+    )
+
     suspend fun restoreExternalEncryptedFile(
         folderUri: Uri,
         backupName: String,
@@ -511,7 +542,8 @@ class VaultRepository(
     ): VaultFileEntity {
         ensureDefaultAlbums()
         if (entry != null) {
-            dao.getFileById(entry.fileId)?.let { return it }
+            val existingLocal = dao.getFileById(entry.fileId)
+            if (existingLocal != null && storageManager.hasLocalEncryptedBlob(existingLocal)) return existingLocal
             entry.albumId?.let { albumId ->
                 if (dao.getAlbumById(albumId) == null) {
                     // Try restoring album metadata from inspection if needed
@@ -536,14 +568,20 @@ class VaultRepository(
             ?: dao.getRecoveryTargetAlbum()?.id
             ?: throw IllegalStateException("Album tujuan pemulihan tidak tersedia")
 
+        val localEntryForRepair = existingLocalForRepair(folderUri, entry, backupName)?.let { buildRecoveryEntryFromLocal(it, backupName) }
         val recovered = storageManager.recoverExternalEncryptedFile(
             folderUri = folderUri,
             backupName = backupName,
-            albumId = targetAlbumId,
-            manifestEntry = entry,
+            albumId = existingLocalForRepair?.albumId?.takeIf { dao.getAlbumById(it) != null } ?: targetAlbumId,
+            manifestEntry = localEntryForRepair ?: entry,
             overrideKey = overrideKey,
             reencryptForCurrentVault = true
         )
+        if (existingLocalForRepair != null) {
+            dao.updateFile(recovered)
+            syncManifestToExternalFolderIfConnected()
+            return recovered
+        }
         val existing = dao.getFileById(recovered.id)
             ?: if (entry == null || !entry.hasManifestMetadata) dao.findFileByOriginalName(recovered.originalName) else null
         if (existing != null) {
