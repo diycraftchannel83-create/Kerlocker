@@ -538,7 +538,7 @@ class VaultRepository(
         albumName = null,
         createdAt = local.createdAt,
         isFavorite = local.isFavorite,
-        thumbFileName = null,
+        thumbFileName = "${local.id}.thumb.vault",
         hasManifestMetadata = true,
         alreadyInLocalVault = true,
         canDecrypt = true
