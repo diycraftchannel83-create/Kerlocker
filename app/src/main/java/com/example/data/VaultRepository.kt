@@ -462,7 +462,27 @@ class VaultRepository(
                     semaphore.withPermit {
                         val local = findLocalRecordForRecovery(entry, entry.backupFileName)
                         if (local != null && storageManager.hasLocalEncryptedBlob(local)) {
-                            skipped.incrementAndGet()
+                            // Repair the database/index relationship from manifest without re-encrypting
+                            // or replacing the existing internal ciphertext.
+                            val manifestAlbumId = entry.albumId?.takeIf { dao.getAlbumById(it) != null }
+                            val repairedAlbumId = manifestAlbumId ?: local.albumId.takeIf { dao.getAlbumById(it) != null } ?: fallbackAlbum.id
+                            val repairedRecord = if (entry.hasManifestMetadata) {
+                                local.copy(
+                                    albumId = repairedAlbumId,
+                                    originalName = entry.displayName.ifBlank { local.originalName },
+                                    mimeType = entry.mimeType.ifBlank { local.mimeType },
+                                    category = entry.category,
+                                    originalSizeBytes = entry.sizeBytes.takeIf { it > 0L } ?: local.originalSizeBytes,
+                                    createdAt = entry.createdAt.takeIf { it > 0L } ?: local.createdAt,
+                                    isFavorite = entry.isFavorite
+                                )
+                            } else local.copy(albumId = repairedAlbumId)
+                            if (repairedRecord != local) {
+                                dbMutex.withLock { dao.updateFile(repairedRecord) }
+                                restored.incrementAndGet()
+                            } else {
+                                skipped.incrementAndGet()
+                            }
                             return@withPermit
                         }
                         if (!entry.canDecrypt) {
