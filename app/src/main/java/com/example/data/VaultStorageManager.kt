@@ -22,6 +22,9 @@ import com.example.crypto.RecoveryKeyBundle
 import com.example.crypto.VaultCryptoEngine
 import com.example.crypto.VaultKeyManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -597,50 +600,55 @@ class VaultStorageManager(
         val albumNamesById = manifestAlbums.associate { it.id to it.name }
         val manifestFilesById = decodedManifest?.files?.associateBy { it.id }.orEmpty()
 
-        val entries = vaultDocs.map { doc ->
-            val fileName = doc.name!!
-            val idCandidate = fileName.removeSuffix(".vault")
-            val thumbName = "$idCandidate.thumb.vault".takeIf { docsByName.containsKey(it) }
-            val meta = manifestFilesById[idCandidate]
-            val canOpen = canDecryptDocumentHeader(doc.uri, primaryOverrideKey)
-            if (meta != null) {
-                val category = runCatching { MediaCategory.valueOf(meta.categoryName) }
-                    .getOrDefault(MediaCategory.fromMimeType(meta.mimeType, meta.originalName))
-                ExternalVaultEntry(
-                    backupFileName = fileName,
-                    fileId = meta.id,
-                    displayName = meta.originalName,
-                    mimeType = meta.mimeType,
-                    category = category,
-                    sizeBytes = meta.originalSizeBytes,
-                    albumId = meta.albumId,
-                    albumName = albumNamesById[meta.albumId],
-                    createdAt = meta.createdAt,
-                    isFavorite = meta.isFavorite,
-                    thumbFileName = thumbName,
-                    hasManifestMetadata = true,
-                    alreadyInLocalVault = meta.id in existingLocalIds,
-                    canDecrypt = canOpen
-                )
-            } else {
-                ExternalVaultEntry(
-                    backupFileName = fileName,
-                    fileId = idCandidate,
-                    displayName = fileName,
-                    mimeType = "application/octet-stream",
-                    category = MediaCategory.OTHER,
-                    sizeBytes = doc.length(),
-                    albumId = null,
-                    albumName = null,
-                    createdAt = doc.lastModified(),
-                    isFavorite = false,
-                    thumbFileName = thumbName,
-                    hasManifestMetadata = false,
-                    alreadyInLocalVault = idCandidate in existingLocalIds,
-                    canDecrypt = canOpen
-                )
-            }
+        val entries = coroutineScope {
+            vaultDocs.map { doc ->
+                async(Dispatchers.IO) {
+                    val fileName = doc.name!!
+                    val idCandidate = fileName.removeSuffix(".vault")
+                    val thumbName = "$idCandidate.thumb.vault".takeIf { docsByName.containsKey(it) }
+                    val meta = manifestFilesById[idCandidate]
+                    val canOpen = canDecryptDocumentHeader(doc.uri, primaryOverrideKey)
+                    if (meta != null) {
+                        val category = runCatching { MediaCategory.valueOf(meta.categoryName) }
+                            .getOrDefault(MediaCategory.fromMimeType(meta.mimeType, meta.originalName))
+                        ExternalVaultEntry(
+                            backupFileName = fileName,
+                            fileId = meta.id,
+                            displayName = meta.originalName,
+                            mimeType = meta.mimeType,
+                            category = category,
+                            sizeBytes = meta.originalSizeBytes,
+                            albumId = meta.albumId,
+                            albumName = albumNamesById[meta.albumId],
+                            createdAt = meta.createdAt,
+                            isFavorite = meta.isFavorite,
+                            thumbFileName = thumbName,
+                            hasManifestMetadata = true,
+                            alreadyInLocalVault = meta.id in existingLocalIds,
+                            canDecrypt = canOpen
+                        )
+                    } else {
+                        ExternalVaultEntry(
+                            backupFileName = fileName,
+                            fileId = idCandidate,
+                            displayName = fileName,
+                            mimeType = "application/octet-stream",
+                            category = MediaCategory.OTHER,
+                            sizeBytes = doc.length(),
+                            albumId = null,
+                            albumName = null,
+                            createdAt = doc.lastModified(),
+                            isFavorite = false,
+                            thumbFileName = thumbName,
+                            hasManifestMetadata = false,
+                            alreadyInLocalVault = idCandidate in existingLocalIds,
+                            canDecrypt = canOpen
+                        )
+                    }
+                }
+            }.awaitAll()
         }
+
 
         val manifestLocked = manifestDoc != null && decodedManifest == null
         val anyLockedFiles = entries.any { !it.canDecrypt }
