@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -32,6 +33,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -146,10 +148,12 @@ fun VaultHomeScreen(
     onScanGallery: () -> Unit = {},
     onReuseCachedGalleryScan: () -> Unit = {},
     cachedGalleryScanCount: Int = 0,
+    cachedGalleryScanNames: List<String> = emptyList(),
     onSortOrderChange: (GallerySortOrder) -> Unit,
     loadThumbnail: suspend (VaultFileEntity) -> Bitmap?
 ) {
     var showCreateAlbumDialog by remember { mutableStateOf(false) }
+    var showGalleryScanResults by remember { mutableStateOf(false) }
     var editingAlbum by remember { mutableStateOf<AlbumEntity?>(null) }
     var deletingAlbum by remember { mutableStateOf<AlbumWithStats?>(null) }
     var showMoveOnDeletePicker by remember { mutableStateOf<AlbumWithStats?>(null) }
@@ -425,7 +429,7 @@ fun VaultHomeScreen(
                 if (cachedGalleryScanCount > 0) {
                     item(key = "gallery_scan_cache_banner") {
                         Card(
-                            modifier = Modifier.fillMaxWidth().clickable { onReuseCachedGalleryScan() },
+                            modifier = Modifier.fillMaxWidth().clickable { showGalleryScanResults = true },
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
                         ) {
                             Row(
@@ -437,6 +441,7 @@ fun VaultHomeScreen(
                                     Text("Indeks Scan Galeri Tersimpan", fontWeight = FontWeight.SemiBold)
                                     Text("$cachedGalleryScanCount media • gunakan untuk recovery tanpa scan ulang", style = MaterialTheme.typography.bodySmall)
                                 }
+                                TextButton(onClick = { showGalleryScanResults = true }) { Text("Lihat") }
                                 TextButton(onClick = onReuseCachedGalleryScan) { Text("Recovery") }
                             }
                         }
@@ -750,6 +755,26 @@ fun VaultHomeScreen(
                 }
             }
         }
+    }
+
+    if (showGalleryScanResults) {
+        AlertDialog(
+            onDismissRequest = { showGalleryScanResults = false },
+            title = { Text("Hasil Scan Galeri Tersimpan") },
+            text = {
+                Column(modifier = Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+                    Text("Total: $cachedGalleryScanCount media. Daftar ini disimpan untuk recovery tanpa scan ulang.", style = MaterialTheme.typography.bodySmall)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    cachedGalleryScanNames.forEachIndexed { index, name ->
+                        Text("${index + 1}. $name", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(onClick = { showGalleryScanResults = false; onReuseCachedGalleryScan() }) { Text("Recovery dari indeks") }
+            },
+            dismissButton = { TextButton(onClick = { showGalleryScanResults = false }) { Text("Tutup") } }
+        )
     }
 
     if (showActionSheet) {
